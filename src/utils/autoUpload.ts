@@ -51,7 +51,8 @@ const getFileSize = (fileName: string) => {
 export const autoUploadFile = async (fileName: string): Promise<void> => {
   return new Promise(async (resolve, reject) => {
     try {
-      const filePath = `d:\\mywork\\web\\system_web\\data\\${fileName}`;
+      // 从public文件夹读取文件
+      const filePath = `/${fileName}`;
       
       // 创建文件对象
       const response = await fetch(filePath);

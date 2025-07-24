@@ -17,7 +17,10 @@ import {
   message,
   Modal,
   Descriptions,
+  Pagination,
 } from 'antd';
+import ReactECharts from 'echarts-for-react';
+import * as echarts from 'echarts';
 import {
   InboxOutlined,
   UploadOutlined,
@@ -50,6 +53,9 @@ const DataManagement: React.FC = () => {
   const [previewVisible, setPreviewVisible] = useState(false);
   const [selectedFile, setSelectedFile] = useState<DataFile | null>(null);
   const [autoUploadCompleted, setAutoUploadCompleted] = useState(false);
+  const [visualizationFile, setVisualizationFile] = useState<DataFile | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [chartsPerPage] = useState(6);
   const dispatch = useAppDispatch();
   const { files, filter, uploadProgress } = useAppSelector((state) => state.data);
 
@@ -233,6 +239,133 @@ const DataManagement: React.FC = () => {
     key: col,
   })) || [];
 
+  // 生成直方图数据
+  const generateHistogramData = (data: number[], columnName: string) => {
+    if (!data || data.length === 0) return null;
+    
+    const min = Math.min(...data);
+    const max = Math.max(...data);
+    const binCount = Math.min(20, Math.ceil(Math.sqrt(data.length))); // 自适应分箱数量
+    const binWidth = (max - min) / binCount;
+    
+    const bins = Array(binCount).fill(0);
+    const binLabels = [];
+    
+    // 创建分箱标签
+    for (let i = 0; i < binCount; i++) {
+      const binStart = min + i * binWidth;
+      const binEnd = min + (i + 1) * binWidth;
+      binLabels.push(binStart.toFixed(1));
+    }
+    
+    // 统计每个分箱的频数
+    data.forEach(value => {
+      const binIndex = Math.min(Math.floor((value - min) / binWidth), binCount - 1);
+      bins[binIndex]++;
+    });
+    
+    return {
+      title: columnName,
+      xData: binLabels,
+      yData: bins,
+      min: min.toFixed(2),
+      max: max.toFixed(2),
+      count: data.length
+    };
+  };
+
+  // 获取直方图配置
+  const getHistogramOption = (histogramData: any) => {
+    if (!histogramData) return {};
+    
+    return {
+      title: {
+        text: histogramData.title,
+        left: 'center',
+        textStyle: {
+          fontSize: 14,
+          fontWeight: 'normal'
+        }
+      },
+      grid: {
+        left: '10%',
+        right: '10%',
+        bottom: '15%',
+        top: '20%'
+      },
+      xAxis: {
+        type: 'category',
+        data: histogramData.xData,
+        axisLabel: {
+          fontSize: 10,
+          rotate: 45
+        },
+        name: '值',
+        nameLocation: 'middle',
+        nameGap: 25
+      },
+      yAxis: {
+        type: 'value',
+        name: '频数',
+        nameLocation: 'middle',
+        nameGap: 30,
+        axisLabel: {
+          fontSize: 10
+        }
+      },
+      series: [{
+        data: histogramData.yData,
+        type: 'bar',
+        itemStyle: {
+          color: '#5B9BD5'
+        },
+        barWidth: '80%'
+      }],
+      tooltip: {
+        trigger: 'axis',
+        formatter: function(params: any) {
+          const dataIndex = params[0].dataIndex;
+          const binStart = histogramData.xData[dataIndex];
+          const binEnd = dataIndex < histogramData.xData.length - 1 ? 
+            histogramData.xData[dataIndex + 1] : 
+            histogramData.max;
+          return `区间: [${binStart}, ${binEnd})<br/>频数: ${params[0].value}`;
+        }
+      }
+    };
+  };
+
+  // 获取数值列数据
+  const getNumericColumnsData = (file: DataFile) => {
+    if (!file.rawData) return [];
+    
+    const numericColumns: Array<{name: string, data: number[]}> = [];
+    
+    file.rawData.headers.forEach((header, colIndex) => {
+      const columnData = file.rawData!.data.map(row => {
+        const value = row[colIndex];
+        return typeof value === 'number' ? value : parseFloat(value);
+      }).filter(val => !isNaN(val));
+      
+      if (columnData.length > 0) {
+        numericColumns.push({
+          name: header,
+          data: columnData
+        });
+      }
+    });
+    
+    return numericColumns;
+  };
+
+  // 设置可视化文件
+  useEffect(() => {
+    const successFiles = files.filter(f => f.status === 'success' && f.rawData);
+    if (successFiles.length > 0 && !visualizationFile) {
+      setVisualizationFile(successFiles[0]);
+    }
+  }, [files, visualizationFile]);
+
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
@@ -364,6 +497,85 @@ const DataManagement: React.FC = () => {
           </Col>
         </Row>
       </Card>
+
+      {/* 数据可视化概览 */}
+      {visualizationFile && (() => {
+        const numericColumns = getNumericColumnsData(visualizationFile);
+        const totalColumns = numericColumns.length;
+        const startIndex = (currentPage - 1) * chartsPerPage;
+        const endIndex = Math.min(startIndex + chartsPerPage, totalColumns);
+        const currentColumns = numericColumns.slice(startIndex, endIndex);
+        
+        return (
+          <Card 
+            title="数据可视化概览" 
+            extra={
+              <Space>
+                <Select
+                  value={visualizationFile.id}
+                  onChange={(value) => {
+                    const file = files.find(f => f.id === value);
+                    if (file) {
+                      setVisualizationFile(file);
+                      setCurrentPage(1);
+                    }
+                  }}
+                  style={{ width: 200 }}
+                >
+                  {files.filter(f => f.status === 'success' && f.rawData).map(file => (
+                    <Option key={file.id} value={file.id}>{file.name}</Option>
+                  ))}
+                </Select>
+              </Space>
+            }
+          >
+            <div className="mb-4">
+              <Text className="text-blue-600 text-lg font-medium">
+                数据分布可视化 (第{startIndex + 1}-{endIndex}列，共{totalColumns}列)
+              </Text>
+            </div>
+            
+            <Row gutter={[16, 16]}>
+              {currentColumns.map((column, index) => {
+                const histogramData = generateHistogramData(column.data, column.name);
+                if (!histogramData) return null;
+                
+                return (
+                  <Col span={8} key={`${column.name}-${index}`}>
+                    <div className="border rounded p-2 bg-white shadow-sm">
+                      <ReactECharts
+                        option={getHistogramOption(histogramData)}
+                        style={{ height: '280px', width: '100%' }}
+                        opts={{ 
+                          renderer: 'canvas',
+                          devicePixelRatio: window.devicePixelRatio || 1
+                        }}
+                        echarts={echarts}
+                        notMerge={true}
+                        lazyUpdate={true}
+                      />
+                    </div>
+                  </Col>
+                );
+              })}
+            </Row>
+            
+            {totalColumns > chartsPerPage && (
+              <div className="mt-4 text-center">
+                <Pagination
+                  current={currentPage}
+                  total={totalColumns}
+                  pageSize={chartsPerPage}
+                  onChange={(page) => setCurrentPage(page)}
+                  showSizeChanger={false}
+                  showQuickJumper
+                  showTotal={(total, range) => `第 ${range[0]}-${range[1]} 列，共 ${total} 列`}
+                />
+              </div>
+            )}
+          </Card>
+        );
+      })()}
 
       {/* 文件列表 */}
       <Card title="文件列表">
