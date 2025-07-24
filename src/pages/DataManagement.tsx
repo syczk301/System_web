@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Card,
   Upload,
@@ -36,6 +36,7 @@ import {
   setUploadProgress,
 } from '../store/slices/dataSlice';
 import type { DataFile } from '../store/slices/dataSlice';
+import { autoUploadFiles, isFileAlreadyUploaded } from '../utils/autoUpload';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -47,8 +48,35 @@ const { Search } = Input;
 const DataManagement: React.FC = () => {
   const [previewVisible, setPreviewVisible] = useState(false);
   const [selectedFile, setSelectedFile] = useState<DataFile | null>(null);
+  const [autoUploadCompleted, setAutoUploadCompleted] = useState(false);
   const dispatch = useAppDispatch();
   const { files, filter, uploadProgress } = useAppSelector((state) => state.data);
+
+  // 自动上传指定的Excel文件
+  useEffect(() => {
+    const performAutoUpload = async () => {
+      if (autoUploadCompleted) return;
+      
+      const filesToUpload = ['正常数据.xlsx', '质检数据.xlsx'];
+      const filesToUploadFiltered = filesToUpload.filter(fileName => !isFileAlreadyUploaded(fileName));
+      
+      if (filesToUploadFiltered.length > 0) {
+        try {
+          message.info('正在自动上传预设数据文件...');
+          await autoUploadFiles(filesToUploadFiltered);
+          message.success('预设数据文件自动上传完成！');
+        } catch (error) {
+          message.error('自动上传失败，请手动上传文件');
+        }
+      }
+      
+      setAutoUploadCompleted(true);
+    };
+
+    // 延迟1秒后开始自动上传，确保组件完全加载
+    const timer = setTimeout(performAutoUpload, 1000);
+    return () => clearTimeout(timer);
+  }, [autoUploadCompleted]);
 
   // 模拟数据
   const mockData = [
@@ -247,6 +275,13 @@ const DataManagement: React.FC = () => {
 
       {/* 文件上传 */}
       <Card title="文件上传" className="mb-6">
+        {!autoUploadCompleted && (
+          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded">
+            <Text className="text-blue-600">
+              📁 系统正在自动加载预设数据文件（正常数据.xlsx, 质检数据.xlsx）...
+            </Text>
+          </div>
+        )}
         <Dragger
           name="file"
           multiple
@@ -260,6 +295,8 @@ const DataManagement: React.FC = () => {
           <p className="ant-upload-text text-lg">点击或拖拽文件到此区域上传</p>
           <p className="ant-upload-hint text-gray-500">
             支持 Excel (.xlsx, .xls) 和 CSV 格式文件，单个文件不超过 10MB
+            <br />
+            <Text type="secondary">系统已自动加载：正常数据.xlsx, 质检数据.xlsx</Text>
           </p>
         </Dragger>
       </Card>
