@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Card,
   Form,
@@ -38,12 +38,28 @@ const { TabPane } = Tabs;
 const PCAAnalysis: React.FC = () => {
   const [form] = Form.useForm();
   const [running, setRunning] = useState(false);
+  const [formValues, setFormValues] = useState({
+    autoSelect: true,
+    confidenceLevel: 0.05,
+    removeOutliers: false,
+    nComponents: 10,
+    dataFile: undefined
+  });
+  const [renderKey, setRenderKey] = useState(0); // 用于强制重新渲染图表
   const dispatch = useAppDispatch();
   const { files } = useAppSelector((state) => state.data);
   const { config, results } = useAppSelector((state) => state.analysis);
   
-  // 获取最新的PCA分析结果
-  const currentResult = results.find(result => result.type === 'pca' && result.status === 'completed') || null;
+  // 获取最新的PCA分析结果 - 按创建时间排序，取最新的完成结果
+  const currentResult = results
+    .filter(result => result.type === 'pca' && result.status === 'completed')
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0] || null;
+
+  // 确保表单值与本地状态同步
+  useEffect(() => {
+    console.log('组件初始化，设置表单值:', formValues);
+    form.setFieldsValue(formValues);
+  }, [form, formValues]);
 
   // 计算T²统计量的控制限
   const calculateT2ControlLimit = (numComponents: number, sampleSize: number, alpha: number = 0.05): number => {
@@ -207,6 +223,9 @@ const PCAAnalysis: React.FC = () => {
   };
 
   const handleAnalysis = async (values: any) => {
+    console.log('开始分析，接收到的参数:', values);
+    console.log('当前formValues状态:', formValues);
+    
     if (!values.dataFile) {
       message.error('请选择数据文件');
       return;
@@ -214,8 +233,10 @@ const PCAAnalysis: React.FC = () => {
 
     setRunning(true);
 
-    // 更新配置
+    // 更新配置到Redux
     dispatch(updateConfig({ type: 'pca', config: values }));
+    // 同时更新本地状态
+    setFormValues(values);
 
     // 创建分析结果
     const result: AnalysisResult = {
@@ -315,9 +336,17 @@ const PCAAnalysis: React.FC = () => {
       });
       
       // 自动选择最佳主成分数量
-      const optimalComponents = values.autoSelect !== false ? 
+      const optimalComponents = values.autoSelect === true ? 
         findOptimalComponents(normalizedEigenValues) : 
-        Math.min(values.nComponents || 3, normalizedEigenValues.length);
+        Math.min(values.nComponents || 10, normalizedEigenValues.length);
+      
+      console.log('主成分选择信息:', {
+        autoSelect: values.autoSelect,
+        manualComponents: values.nComponents,
+        selectedComponents: optimalComponents,
+        totalComponents: normalizedEigenValues.length,
+        判断结果: values.autoSelect === true ? '使用自动选择' : '使用手动设置'
+      });
       
       const selectedEigenValues = normalizedEigenValues.slice(0, optimalComponents);
       const totalVariance = normalizedEigenValues.reduce((sum, val) => sum + val, 0);
@@ -434,7 +463,7 @@ const PCAAnalysis: React.FC = () => {
         varianceRatio,
         cumulativeVariance,
         optimalComponents,
-        autoSelected: values.autoSelect !== false,
+        autoSelected: values.autoSelect === true,
         tSquared: tSquaredData,
         spe: speData,
         controlLimits,
@@ -540,6 +569,13 @@ const PCAAnalysis: React.FC = () => {
       ];
 
       // 直接完成分析
+      console.log('准备更新分析结果，ID:', result.id);
+      console.log('分析结果数据:', { 
+        optimalComponents: analysisResults.optimalComponents,
+        totalVarianceExplained: analysisResults.dataInfo?.totalVarianceExplained,
+        chartsCount: charts.length
+      });
+      
       dispatch(updateResult({
         id: result.id,
         updates: {
@@ -552,7 +588,15 @@ const PCAAnalysis: React.FC = () => {
       }));
 
       setRunning(false);
-      message.success('PCA分析完成！');
+      message.success('PCA分析完成！参数修改已生效，所有图表和数值已更新');
+      
+      // 强制重新渲染所有图表组件
+      setRenderKey(prev => prev + 1);
+      
+      // 确保表单状态正确，可以进行二次修改
+      console.log('分析完成，当前表单值:', form.getFieldsValue());
+      console.log('分析完成，当前formValues:', formValues);
+      console.log('最新结果ID:', result.id, '创建时间:', result.createdAt);
       
     } catch (error) {
       console.error('PCA分析错误:', error);
@@ -1114,8 +1158,14 @@ const PCAAnalysis: React.FC = () => {
             <Form
               form={form}
               layout="vertical"
-              initialValues={config.pca}
+              initialValues={formValues}
               onFinish={handleAnalysis}
+              onValuesChange={(changedValues, allValues) => {
+                console.log('表单值变化:', { changedValues, allValues });
+                setFormValues(allValues);
+                // 同时更新Redux配置
+                dispatch(updateConfig({ type: 'pca', config: allValues }));
+              }}
             >
               <Form.Item
                 name="dataFile"
@@ -1147,15 +1197,24 @@ const PCAAnalysis: React.FC = () => {
                 name="autoSelect"
                 label="主成分数量选择"
                 valuePropName="checked"
-                initialValue={true}
               >
                 <Switch 
                   checkedChildren="自动选择" 
                   unCheckedChildren="手动设置"
                   onChange={(checked) => {
+                    console.log('Switch状态变化:', checked);
+                    const newValues = { ...formValues, autoSelect: checked };
                     if (checked) {
-                      form.setFieldsValue({ nComponents: undefined });
+                      // 切换到自动选择时，清除手动输入的值
+                      newValues.nComponents = undefined;
+                      form.setFieldsValue({ autoSelect: checked, nComponents: undefined });
+                    } else {
+                      // 切换到手动设置时，设置一个默认值
+                      newValues.nComponents = 10;
+                      form.setFieldsValue({ autoSelect: checked, nComponents: 10 });
                     }
+                    setFormValues(newValues);
+                    dispatch(updateConfig({ type: 'pca', config: newValues }));
                   }}
                 />
               </Form.Item>
@@ -1265,11 +1324,8 @@ const PCAAnalysis: React.FC = () => {
         <Col span={16}>
           <Card title="分析结果">
             {running && (
-              <div className="text-center py-8">
-                <Spin size="large" />
-                <div className="mt-4">
-                  <Text>正在计算PCA分析结果...</Text>
-                </div>
+              <div className="text-center py-4">
+                <Text type="secondary">正在分析中...</Text>
               </div>
             )}
 
@@ -1278,11 +1334,16 @@ const PCAAnalysis: React.FC = () => {
                 {/* 调试信息 */}
                 {process.env.NODE_ENV === 'development' && (
                   <div className="mb-4 p-2 bg-gray-100 rounded text-xs">
+                    <div>结果ID: {currentResult.id}</div>
+                    <div>创建时间: {currentResult.createdAt}</div>
+                    <div>主成分数量: {currentResult.results?.optimalComponents}</div>
+                    <div>自动选择: {currentResult.results?.autoSelected ? '是' : '否'}</div>
                     <div>图表数量: {currentResult.charts?.length || 0}</div>
                     <div>投影图表: {currentResult.charts?.filter(c => c.type.includes('projection')).length || 0}</div>
+                    <div>方差解释率: {(currentResult.results?.dataInfo?.totalVarianceExplained * 100).toFixed(1)}%</div>
                   </div>
                 )}
-                <Tabs defaultActiveKey="charts">
+                <Tabs defaultActiveKey="charts" key={`pca-tabs-${renderKey}-${currentResult?.id}`}>
                 <TabPane tab="监控图表" key="charts">
                   <div className="space-y-6">
                     {currentResult.charts.filter(chart => 
@@ -1307,6 +1368,7 @@ const PCAAnalysis: React.FC = () => {
                         <div key={index} className="w-full">
                           <div className="border rounded p-4 bg-white shadow-sm">
                             <ReactECharts
+                              key={`chart-${renderKey}-${currentResult?.id}-${index}`}
                               option={chartOption}
                               style={{ height: '450px', width: '100%' }}
                               opts={{ 
@@ -1324,6 +1386,83 @@ const PCAAnalysis: React.FC = () => {
                         </div>
                       );
                     })}
+                    
+                    {/* 添加异常检测结果说明 */}
+                    <div className="mt-6 p-4 bg-gray-50 rounded border">
+                      <h4 className="text-lg font-semibold text-gray-800 mb-3">📊 异常检测结果</h4>
+                      {(() => {
+                        if (!currentResult?.results) return <Text>暂无结果</Text>;
+                        
+                        const { tSquared, spe, controlLimits } = currentResult.results;
+                        const totalSamples = tSquared?.length || 0;
+                        const trainSize = Math.floor(totalSamples * 0.8);
+                        
+                        // 计算异常点
+                        const t2Outliers = tSquared?.filter((val: number) => val > controlLimits.tSquared).length || 0;
+                        const speOutliers = spe?.filter((val: number) => val > controlLimits.spe).length || 0;
+                        
+                        // 分训练集和测试集统计
+                        const t2TrainOutliers = tSquared?.slice(0, trainSize).filter((val: number) => val > controlLimits.tSquared).length || 0;
+                        const t2TestOutliers = tSquared?.slice(trainSize).filter((val: number) => val > controlLimits.tSquared).length || 0;
+                        const speTrainOutliers = spe?.slice(0, trainSize).filter((val: number) => val > controlLimits.spe).length || 0;
+                        const speTestOutliers = spe?.slice(trainSize).filter((val: number) => val > controlLimits.spe).length || 0;
+                        
+                        // 获取异常点索引
+                        const t2TrainOutlierIndices = tSquared?.slice(0, trainSize)
+                          .map((val: number, idx: number) => val > controlLimits.tSquared ? idx : -1)
+                          .filter((idx: number) => idx !== -1) || [];
+                        const t2TestOutlierIndices = tSquared?.slice(trainSize)
+                          .map((val: number, idx: number) => val > controlLimits.tSquared ? idx + trainSize : -1)
+                          .filter((idx: number) => idx !== -1) || [];
+                        const speTrainOutlierIndices = spe?.slice(0, trainSize)
+                          .map((val: number, idx: number) => val > controlLimits.spe ? idx : -1)
+                          .filter((idx: number) => idx !== -1) || [];
+                        const speTestOutlierIndices = spe?.slice(trainSize)
+                          .map((val: number, idx: number) => val > controlLimits.spe ? idx + trainSize : -1)
+                          .filter((idx: number) => idx !== -1) || [];
+                        
+                        return (
+                          <div className="space-y-3 text-sm">
+                            <div className="grid grid-cols-2 gap-4">
+                              <div>
+                                <Text strong className="text-blue-600">控制限设置：</Text>
+                                <div className="mt-1">
+                                  <div>T² = <Text code>{controlLimits.tSquared.toFixed(4)}</Text></div>
+                                  <div>SPE = <Text code>{controlLimits.spe.toFixed(4)}</Text></div>
+                                </div>
+                              </div>
+                              <div>
+                                <Text strong className="text-red-600">异常样本统计：</Text>
+                                <div className="mt-1">
+                                  <div>T²： 训练集 <Text strong className="text-red-600">{t2TrainOutliers}</Text> 个  |  测试集 <Text strong className="text-red-600">{t2TestOutliers}</Text> 个</div>
+                                  <div>SPE： 训练集 <Text strong className="text-orange-600">{speTrainOutliers}</Text> 个  |  测试集 <Text strong className="text-orange-600">{speTestOutliers}</Text> 个</div>
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div>
+                              <Text strong className="text-gray-700">异常点位索引：</Text>
+                              <div className="mt-2 space-y-1 text-xs">
+                                <div>
+                                  <Text strong>T² 训练集：</Text>
+                                  <Text code className="ml-2">[{t2TrainOutlierIndices.join(', ')}]</Text>
+                                  <span className="mx-2">|</span>
+                                  <Text strong>T² 测试集：</Text>
+                                  <Text code className="ml-2">[{t2TestOutlierIndices.join(', ')}]</Text>
+                                </div>
+                                <div>
+                                  <Text strong>SPE 训练集：</Text>
+                                  <Text code className="ml-2">[{speTrainOutlierIndices.join(', ')}]</Text>
+                                  <span className="mx-2">|</span>
+                                  <Text strong>SPE 测试集：</Text>
+                                  <Text code className="ml-2">[{speTestOutlierIndices.join(', ')}]</Text>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
                   </div>
                 </TabPane>
                 
@@ -1355,6 +1494,7 @@ const PCAAnalysis: React.FC = () => {
                         <Col span={colSpan} key={index}>
                           <div className="border rounded p-2 bg-white shadow-sm">
                             <ReactECharts
+                              key={`projection-${renderKey}-${currentResult?.id}-${index}`}
                               option={chartOption}
                               style={{ height: chartHeight, width: '100%' }}
                               opts={{ 
@@ -1396,6 +1536,7 @@ const PCAAnalysis: React.FC = () => {
                   <div className="space-y-4">
                     <Card type="inner" title="主成分分析结果">
                       <Table
+                        key={`results-table-${renderKey}-${currentResult?.id}`}
                         columns={resultsColumns}
                         dataSource={resultsData}
                         pagination={false}
