@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Form,
@@ -10,6 +10,7 @@ import {
   Divider,
   message,
   Tabs,
+  Checkbox,
 } from 'antd';
 import {
   UserOutlined,
@@ -25,6 +26,7 @@ const { TabPane } = Tabs;
 interface LoginForm {
   username: string;
   password: string;
+  remember?: boolean;
 }
 
 interface RegisterForm {
@@ -37,8 +39,37 @@ interface RegisterForm {
 const Login: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('login');
+  const [loginForm] = Form.useForm();
   const navigate = useNavigate();
   const dispatch = useAppDispatch();
+
+  // 页面加载时恢复保存的账号密码或设置默认值
+  useEffect(() => {
+    const savedCredentials = localStorage.getItem('rememberedCredentials');
+    if (savedCredentials) {
+      try {
+        const { username, password } = JSON.parse(savedCredentials);
+        loginForm.setFieldsValue({
+          username,
+          password,
+          remember: true,
+        });
+      } catch (error) {
+        console.error('Failed to parse saved credentials:', error);
+        // 如果解析失败，设置默认用户名和密码
+        loginForm.setFieldsValue({
+          username: 'admin',
+          password: 'admin',
+        });
+      }
+    } else {
+      // 如果没有保存的凭据，默认填入admin用户名和密码
+      loginForm.setFieldsValue({
+        username: 'admin',
+        password: 'admin',
+      });
+    }
+  }, [loginForm]);
 
   const handleLogin = async (values: LoginForm) => {
     setLoading(true);
@@ -57,6 +88,19 @@ const Login: React.FC = () => {
       };
       
       const token = 'mock-jwt-token-' + Date.now();
+      
+      // 处理记住密码功能
+      if (values.remember) {
+        // 保存账号密码到本地存储
+        const credentialsToSave = {
+          username: values.username,
+          password: values.password,
+        };
+        localStorage.setItem('rememberedCredentials', JSON.stringify(credentialsToSave));
+      } else {
+        // 如果未选择记住密码，清除之前保存的信息
+        localStorage.removeItem('rememberedCredentials');
+      }
       
       dispatch(loginSuccess({ user: userData, token }));
       message.success('登录成功！');
@@ -103,6 +147,7 @@ const Login: React.FC = () => {
           <TabPane tab="登录" key="login">
             <Form
               name="login"
+              form={loginForm}
               onFinish={handleLogin}
               layout="vertical"
               size="large"
@@ -129,6 +174,10 @@ const Login: React.FC = () => {
                   prefix={<LockOutlined />}
                   placeholder="密码"
                 />
+              </Form.Item>
+
+              <Form.Item name="remember" valuePropName="checked">
+                <Checkbox>记住账号密码</Checkbox>
               </Form.Item>
 
               <Form.Item>

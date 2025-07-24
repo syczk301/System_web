@@ -25,12 +25,10 @@ import {
 } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
-import {
-  addResult,
-  updateResult,
-  updateConfig,
-} from '../store/slices/analysisSlice';
+import { updateConfig } from '../store/slices/analysisSlice';
+import { addResult, updateResult } from '../store/slices/analysisSlice';
 import type { AnalysisResult } from '../store/slices/analysisSlice';
+import { getNumericColumns } from '../utils/excelParser';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -56,10 +54,12 @@ const SPCAnalysis: React.FC = () => {
 
     dispatch(updateConfig({ type: 'spc', config: values }));
 
+    const selectedFile = files.find(f => f.id === values.dataFile);
+    
     const result: AnalysisResult = {
       id: Date.now().toString(),
       type: 'spc',
-      name: `SPC分析_${new Date().toLocaleString()}`,
+      name: `SPC分析_${selectedFile?.name || 'Unknown'}_${new Date().toLocaleString()}`,
       dataFileId: values.dataFile,
       parameters: values,
       results: {},
@@ -84,103 +84,234 @@ const SPCAnalysis: React.FC = () => {
           clearInterval(timer);
           setRunning(false);
           
-          // 生成模拟数据
-          const sampleSize = 50;
-          const xBarData = Array.from({ length: sampleSize }, (_, i) => {
-            const base = 100 + Math.sin(i * 0.2) * 5;
-            return base + (Math.random() - 0.5) * 8;
-          });
-          
-          const rData = Array.from({ length: sampleSize }, () => Math.random() * 15 + 2);
-          
-          const xBarMean = xBarData.reduce((a, b) => a + b, 0) / xBarData.length;
-          const rMean = rData.reduce((a, b) => a + b, 0) / rData.length;
-          
-          const xBarUCL = xBarMean + 3 * (rMean / 2.326);
-          const xBarLCL = xBarMean - 3 * (rMean / 2.326);
-          const rUCL = rMean * 2.114;
-          
-          // 检测异常点
-          const xBarAlerts = xBarData.map((value, index) => ({
-            index: index + 1,
-            value,
-            isAlert: value > xBarUCL || value < xBarLCL,
-            type: value > xBarUCL ? '超出上控制限' : value < xBarLCL ? '超出下控制限' : '',
-          })).filter(item => item.isAlert);
-          
-          const rAlerts = rData.map((value, index) => ({
-            index: index + 1,
-            value,
-            isAlert: value > rUCL,
-            type: value > rUCL ? '极差超出控制限' : '',
-          })).filter(item => item.isAlert);
+          // 使用真实数据进行SPC分析
+          let xBarData: number[] = [];
+          let rData: number[] = [];
+          let analysisResults: any = {};
+          let charts: any[] = [];
 
-          const mockResults = {
-            xBarData,
-            rData,
-            xBarMean,
-            rMean,
-            xBarUCL,
-            xBarLCL,
-            rUCL,
-            rLCL: 0,
-            cp: 1.33,
-            cpk: 1.15,
-            pp: 1.28,
-            ppk: 1.12,
-            alerts: [...xBarAlerts, ...rAlerts],
-            processCapability: {
-              specification: {
-                usl: 115,
-                lsl: 85,
-                target: 100,
-              },
-              sigma: rMean / 1.128,
-            },
-          };
+          if (selectedFile && selectedFile.rawData) {
+            const numericColumns = getNumericColumns(selectedFile.rawData);
+            
+            if (numericColumns.length > 0) {
+              // 使用第一个数值列进行SPC分析
+              const columnName = numericColumns[0];
+              const columnData = selectedFile.rawData.data
+                .map(row => parseFloat(row[columnName]))
+                .filter(val => !isNaN(val))
+                .slice(0, Math.min(100, selectedFile.rawData.data.length));
+              
+              if (columnData.length >= values.subgroupSize) {
+                // 计算X̄和R值
+                const subgroupSize = values.subgroupSize || 5;
+                const numSubgroups = Math.floor(columnData.length / subgroupSize);
+                
+                for (let i = 0; i < numSubgroups; i++) {
+                  const subgroup = columnData.slice(i * subgroupSize, (i + 1) * subgroupSize);
+                  const mean = subgroup.reduce((a, b) => a + b, 0) / subgroup.length;
+                  const range = Math.max(...subgroup) - Math.min(...subgroup);
+                  xBarData.push(mean);
+                  rData.push(range);
+                }
+                
+                const xBarMean = xBarData.reduce((a, b) => a + b, 0) / xBarData.length;
+                const rMean = rData.reduce((a, b) => a + b, 0) / rData.length;
+                
+                const xBarUCL = xBarMean + 3 * (rMean / 2.326);
+                const xBarLCL = xBarMean - 3 * (rMean / 2.326);
+                const rUCL = rMean * 2.114;
+                
+                // 检测异常点
+                const xBarAlerts = xBarData.map((value, index) => ({
+                  index: index + 1,
+                  value,
+                  isAlert: value > xBarUCL || value < xBarLCL,
+                  type: value > xBarUCL ? '超出上控制限' : value < xBarLCL ? '超出下控制限' : '',
+                })).filter(item => item.isAlert);
+                
+                const rAlerts = rData.map((value, index) => ({
+                  index: index + 1,
+                  value,
+                  isAlert: value > rUCL,
+                  type: value > rUCL ? '极差超出控制限' : '',
+                })).filter(item => item.isAlert);
 
-          const charts = [
-            {
-              type: 'line',
-              data: {
-                title: 'X̄控制图',
-                xData: Array.from({ length: sampleSize }, (_, i) => i + 1),
-                yData: xBarData,
-                ucl: xBarUCL,
-                lcl: xBarLCL,
-                centerLine: xBarMean,
-                alerts: xBarAlerts,
+                // 计算过程能力指数
+                const overallMean = columnData.reduce((a, b) => a + b, 0) / columnData.length;
+                const overallStd = Math.sqrt(columnData.reduce((sum, val) => sum + Math.pow(val - overallMean, 2), 0) / (columnData.length - 1));
+                
+                // 使用用户输入的规格限或计算默认值
+                const usl = values.usl || (overallMean + 3 * overallStd);
+                const lsl = values.lsl || (overallMean - 3 * overallStd);
+                const target = overallMean;
+                
+                const cp = (usl - lsl) / (6 * overallStd);
+                const cpk = Math.min((usl - overallMean) / (3 * overallStd), (overallMean - lsl) / (3 * overallStd));
+
+                analysisResults = {
+                  xBarData,
+                  rData,
+                  xBarMean,
+                  rMean,
+                  xBarUCL,
+                  xBarLCL,
+                  rUCL,
+                  rLCL: 0,
+                  cp: Math.max(0, cp),
+                  cpk: Math.max(0, cpk),
+                  pp: cp,
+                  ppk: cpk,
+                  alerts: [...xBarAlerts, ...rAlerts],
+                  processCapability: {
+                    specification: {
+                      usl,
+                      lsl,
+                      target,
+                    },
+                    sigma: overallStd,
+                  },
+                  columnName,
+                };
+
+                charts = [
+                  {
+                    type: 'line',
+                    data: {
+                      title: `X̄控制图 (${columnName})`,
+                      xData: Array.from({ length: xBarData.length }, (_, i) => i + 1),
+                      yData: xBarData,
+                      ucl: xBarUCL,
+                      lcl: xBarLCL,
+                      centerLine: xBarMean,
+                      alerts: xBarAlerts,
+                    },
+                  },
+                  {
+                    type: 'line',
+                    data: {
+                      title: `R控制图 (${columnName})`,
+                      xData: Array.from({ length: rData.length }, (_, i) => i + 1),
+                      yData: rData,
+                      ucl: rUCL,
+                      lcl: 0,
+                      centerLine: rMean,
+                      alerts: rAlerts,
+                    },
+                  },
+                  {
+                    type: 'histogram',
+                    data: {
+                      title: `过程能力分析 (${columnName})`,
+                      data: columnData,
+                      usl,
+                      lsl,
+                      target,
+                    },
+                  },
+                ];
+              }
+            }
+          }
+          
+          // 如果没有真实数据或数据不足，使用模拟数据
+          if (xBarData.length === 0) {
+            const mockSampleSize = 50;
+            xBarData = Array.from({ length: mockSampleSize }, (_, i) => {
+              const base = 100 + Math.sin(i * 0.2) * 5;
+              return base + (Math.random() - 0.5) * 8;
+            });
+            
+            rData = Array.from({ length: mockSampleSize }, () => Math.random() * 15 + 2);
+            
+            const xBarMean = xBarData.reduce((a, b) => a + b, 0) / xBarData.length;
+            const rMean = rData.reduce((a, b) => a + b, 0) / rData.length;
+            
+            const xBarUCL = xBarMean + 3 * (rMean / 2.326);
+            const xBarLCL = xBarMean - 3 * (rMean / 2.326);
+            const rUCL = rMean * 2.114;
+            
+            const xBarAlerts = xBarData.map((value, index) => ({
+              index: index + 1,
+              value,
+              isAlert: value > xBarUCL || value < xBarLCL,
+              type: value > xBarUCL ? '超出上控制限' : value < xBarLCL ? '超出下控制限' : '',
+            })).filter(item => item.isAlert);
+            
+            const rAlerts = rData.map((value, index) => ({
+              index: index + 1,
+              value,
+              isAlert: value > rUCL,
+              type: value > rUCL ? '极差超出控制限' : '',
+            })).filter(item => item.isAlert);
+
+            analysisResults = {
+              xBarData,
+              rData,
+              xBarMean,
+              rMean,
+              xBarUCL,
+              xBarLCL,
+              rUCL,
+              rLCL: 0,
+              cp: 1.33,
+              cpk: 1.15,
+              pp: 1.28,
+              ppk: 1.12,
+              alerts: [...xBarAlerts, ...rAlerts],
+              processCapability: {
+                specification: {
+                  usl: 115,
+                  lsl: 85,
+                  target: 100,
+                },
+                sigma: rMean / 1.128,
               },
-            },
-            {
-              type: 'line',
-              data: {
-                title: 'R控制图',
-                xData: Array.from({ length: sampleSize }, (_, i) => i + 1),
-                yData: rData,
-                ucl: rUCL,
-                lcl: 0,
-                centerLine: rMean,
-                alerts: rAlerts,
+              columnName: '模拟数据',
+            };
+
+            charts = [
+              {
+                type: 'line',
+                data: {
+                  title: 'X̄控制图 (模拟数据)',
+                  xData: Array.from({ length: mockSampleSize }, (_, i) => i + 1),
+                  yData: xBarData,
+                  ucl: xBarUCL,
+                  lcl: xBarLCL,
+                  centerLine: xBarMean,
+                  alerts: xBarAlerts,
+                },
               },
-            },
-            {
-              type: 'histogram',
-              data: {
-                title: '过程能力分析',
-                data: xBarData,
-                usl: mockResults.processCapability.specification.usl,
-                lsl: mockResults.processCapability.specification.lsl,
-                target: mockResults.processCapability.specification.target,
+              {
+                type: 'line',
+                data: {
+                  title: 'R控制图 (模拟数据)',
+                  xData: Array.from({ length: mockSampleSize }, (_, i) => i + 1),
+                  yData: rData,
+                  ucl: rUCL,
+                  lcl: 0,
+                  centerLine: rMean,
+                  alerts: rAlerts,
+                },
               },
-            },
-          ];
+              {
+                type: 'histogram',
+                data: {
+                  title: '过程能力分析 (模拟数据)',
+                  data: xBarData,
+                  usl: analysisResults.processCapability.specification.usl,
+                  lsl: analysisResults.processCapability.specification.lsl,
+                  target: analysisResults.processCapability.specification.target,
+                },
+              },
+            ];
+          }
 
           dispatch(updateResult({
             id: result.id,
             updates: {
               status: 'completed',
-              results: mockResults,
+              results: analysisResults,
               charts,
               completedAt: new Date().toISOString(),
             },

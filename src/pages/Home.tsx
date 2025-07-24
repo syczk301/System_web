@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Card,
@@ -10,6 +10,7 @@ import {
   Statistic,
   Timeline,
   Tag,
+  message,
 } from 'antd';
 import {
   BarChartOutlined,
@@ -20,15 +21,48 @@ import {
   TrophyOutlined,
   ClockCircleOutlined,
 } from '@ant-design/icons';
-import { useAppSelector } from '../store/hooks';
+import { useAppSelector, useAppDispatch } from '../store/hooks';
+import { autoUploadFiles, isFileAlreadyUploaded } from '../utils/autoUpload';
 
 const { Title, Paragraph, Text } = Typography;
 
 const Home: React.FC = () => {
   const navigate = useNavigate();
+  const dispatch = useAppDispatch();
   const { user } = useAppSelector((state) => state.auth);
   const { files } = useAppSelector((state) => state.data);
   const { results } = useAppSelector((state) => state.analysis);
+  const [autoUploadCompleted, setAutoUploadCompleted] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+
+  // 自动上传指定的Excel文件
+  useEffect(() => {
+    const performAutoUpload = async () => {
+      if (autoUploadCompleted) return;
+      
+      const filesToUpload = ['正常数据.xlsx', '质检数据.xlsx'];
+      const filesToUploadFiltered = filesToUpload.filter(fileName => !isFileAlreadyUploaded(fileName));
+      
+      if (filesToUploadFiltered.length > 0) {
+        setIsLoading(true);
+        try {
+          message.info('正在自动加载预设数据文件...');
+          await autoUploadFiles(filesToUploadFiltered);
+          message.success('预设数据文件自动加载完成！');
+        } catch (error) {
+          message.error('自动加载失败，请手动上传文件');
+        } finally {
+          setIsLoading(false);
+        }
+      }
+      
+      setAutoUploadCompleted(true);
+    };
+
+    // 延迟1秒后开始自动上传，确保组件完全加载
+    const timer = setTimeout(performAutoUpload, 1000);
+    return () => clearTimeout(timer);
+  }, [autoUploadCompleted]);
 
   const quickActions = [
     {
@@ -108,23 +142,12 @@ const Home: React.FC = () => {
             <Paragraph className="!text-blue-100 text-lg !mb-4">
               专业的工业过程监控与故障诊断平台，集成PCA、ICA、自动编码器等多种先进算法
             </Paragraph>
-            <Space>
-              <Button
-                type="primary"
-                size="large"
-                ghost
-                onClick={() => navigate('/data')}
-              >
-                开始分析
-              </Button>
-              <Button
-                size="large"
-                ghost
-                onClick={() => navigate('/results')}
-              >
-                查看结果
-              </Button>
-            </Space>
+            {!autoUploadCompleted && isLoading && (
+              <div className="mb-4 p-3 bg-blue-100 border border-blue-300 rounded text-blue-800">
+                📁 系统正在自动加载预设数据文件（正常数据.xlsx, 质检数据.xlsx）...
+              </div>
+            )}
+
           </Col>
           <Col span={8} className="text-right">
             <TrophyOutlined className="text-6xl text-yellow-300" />

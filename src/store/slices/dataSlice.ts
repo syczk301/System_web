@@ -1,4 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
+import type { ParsedData } from '../utils/excelParser';
 
 export interface DataFile {
   id: string;
@@ -8,6 +9,10 @@ export interface DataFile {
   status: 'uploading' | 'success' | 'error';
   data?: any[];
   columns?: string[];
+  rawData?: ParsedData;
+  statistics?: { [key: string]: any };
+  rowCount?: number;
+  columnCount?: number;
 }
 
 export interface DataFilter {

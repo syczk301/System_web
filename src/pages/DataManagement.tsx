@@ -37,6 +37,7 @@ import {
 } from '../store/slices/dataSlice';
 import type { DataFile } from '../store/slices/dataSlice';
 import { autoUploadFiles, isFileAlreadyUploaded } from '../utils/autoUpload';
+import { parseExcelFile, convertToTableData, getDataStatistics, type ParsedData } from '../utils/excelParser';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -78,14 +79,15 @@ const DataManagement: React.FC = () => {
     return () => clearTimeout(timer);
   }, [autoUploadCompleted]);
 
-  // 模拟数据
-  const mockData = [
-    { id: 1, timestamp: '2024-01-15 10:00:00', temperature: 25.5, pressure: 1.2, flow: 100.5, quality: 'A' },
-    { id: 2, timestamp: '2024-01-15 10:05:00', temperature: 26.1, pressure: 1.3, flow: 98.2, quality: 'A' },
-    { id: 3, timestamp: '2024-01-15 10:10:00', temperature: 24.8, pressure: 1.1, flow: 102.1, quality: 'B' },
-  ];
 
-  const handleUpload = (file: File) => {
+
+  const handleUpload = async (file: File) => {
+    // 检查文件类型
+    if (!file.name.match(/\.(xlsx|xls)$/i)) {
+      message.error('请上传Excel文件（.xlsx或.xls格式）');
+      return false;
+    }
+
     const newFile: DataFile = {
       id: Date.now().toString(),
       name: file.name,
@@ -95,27 +97,45 @@ const DataManagement: React.FC = () => {
     };
 
     dispatch(addFile(newFile));
+    dispatch(setUploadProgress(10));
 
-    // 模拟上传进度
-    let progress = 0;
-    const timer = setInterval(() => {
-      progress += 10;
-      dispatch(setUploadProgress(progress));
+    try {
+      // 解析Excel文件
+      const parsedData = await parseExcelFile(file);
+      dispatch(setUploadProgress(50));
       
-      if (progress >= 100) {
-        clearInterval(timer);
-        dispatch(updateFile({
-          id: newFile.id,
-          updates: {
-            status: 'success',
-            data: mockData,
-            columns: ['timestamp', 'temperature', 'pressure', 'flow', 'quality'],
-          },
-        }));
-        dispatch(setUploadProgress(0));
-        message.success(`${file.name} 上传成功！`);
-      }
-    }, 200);
+      // 转换为表格数据
+      const tableData = convertToTableData(parsedData);
+      dispatch(setUploadProgress(80));
+      
+      // 获取统计信息
+      const statistics = getDataStatistics(parsedData);
+      dispatch(setUploadProgress(100));
+      
+      // 更新文件状态
+      dispatch(updateFile({
+        id: newFile.id,
+        updates: {
+          status: 'success',
+          data: tableData,
+          columns: parsedData.headers,
+          rawData: parsedData,
+          statistics,
+          rowCount: parsedData.rowCount,
+          columnCount: parsedData.columnCount,
+        },
+      }));
+      
+      dispatch(setUploadProgress(0));
+      message.success(`${file.name} 解析成功！共 ${parsedData.rowCount} 行数据`);
+    } catch (error) {
+      dispatch(updateFile({
+        id: newFile.id,
+        updates: { status: 'error' },
+      }));
+      dispatch(setUploadProgress(0));
+      message.error(`文件解析失败: ${error}`);
+    }
 
     return false; // 阻止默认上传行为
   };

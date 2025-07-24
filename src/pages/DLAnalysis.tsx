@@ -23,12 +23,10 @@ import {
 } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
-import {
-  addResult,
-  updateResult,
-  updateConfig,
-} from '../store/slices/analysisSlice';
+import { updateConfig } from '../store/slices/analysisSlice';
+import { addResult, updateResult } from '../store/slices/analysisSlice';
 import type { AnalysisResult } from '../store/slices/analysisSlice';
+import { getNumericColumns } from '../utils/excelParser';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
