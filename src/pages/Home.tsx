@@ -23,6 +23,7 @@ import {
 } from '@ant-design/icons';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
 import { autoUploadFiles, isFileAlreadyUploaded } from '../utils/autoUpload';
+import { useAutoUpload } from '../hooks/useAutoUpload';
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -32,37 +33,9 @@ const Home: React.FC = () => {
   const { user } = useAppSelector((state) => state.auth);
   const { files } = useAppSelector((state) => state.data);
   const { results } = useAppSelector((state) => state.analysis);
-  const [autoUploadCompleted, setAutoUploadCompleted] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
 
-  // 自动上传指定的Excel文件
-  useEffect(() => {
-    const performAutoUpload = async () => {
-      if (autoUploadCompleted) return;
-      
-      const filesToUpload = ['正常数据.xlsx', '质检数据.xlsx'];
-      const filesToUploadFiltered = filesToUpload.filter(fileName => !isFileAlreadyUploaded(fileName));
-      
-      if (filesToUploadFiltered.length > 0) {
-        setIsLoading(true);
-        try {
-          message.info('正在自动加载预设数据文件...');
-          await autoUploadFiles(filesToUploadFiltered);
-          message.success('预设数据文件自动加载完成！');
-        } catch (error) {
-          message.error('自动加载失败，请手动上传文件');
-        } finally {
-          setIsLoading(false);
-        }
-      }
-      
-      setAutoUploadCompleted(true);
-    };
-
-    // 延迟1秒后开始自动上传，确保组件完全加载
-    const timer = setTimeout(performAutoUpload, 1000);
-    return () => clearTimeout(timer);
-  }, [autoUploadCompleted]);
+  // 自动加载数据
+  const { autoUploadCompleted, isLoading } = useAutoUpload();
 
   const quickActions = [
     {

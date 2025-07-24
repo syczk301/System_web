@@ -26,6 +26,7 @@ import { updateConfig } from '../store/slices/analysisSlice';
 import { addResult, updateResult } from '../store/slices/analysisSlice';
 import type { AnalysisResult } from '../store/slices/analysisSlice';
 import { getNumericColumns } from '../utils/excelParser';
+import { useAutoUpload } from '../hooks/useAutoUpload';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -39,6 +40,9 @@ const AEAnalysis: React.FC = () => {
   const dispatch = useAppDispatch();
   const { files } = useAppSelector((state) => state.data);
   const { config } = useAppSelector((state) => state.analysis);
+
+  // 自动加载数据
+  const { autoUploadCompleted, isLoading } = useAutoUpload();
 
   const handleAnalysis = async (values: any) => {
     if (!values.dataFile) {

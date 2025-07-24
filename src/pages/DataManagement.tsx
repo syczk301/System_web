@@ -9,7 +9,6 @@ import {
   Row,
   Col,
   Statistic,
-  Progress,
   Tag,
   DatePicker,
   Select,
@@ -36,11 +35,11 @@ import {
   removeFile,
   setCurrentFile,
   setFilter,
-  setUploadProgress,
 } from '../store/slices/dataSlice';
 import type { DataFile } from '../store/slices/dataSlice';
 import { autoUploadFiles, isFileAlreadyUploaded } from '../utils/autoUpload';
 import { parseExcelFile, convertToTableData, getDataStatistics, type ParsedData } from '../utils/excelParser';
+import { useAutoUpload } from '../hooks/useAutoUpload';
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -52,39 +51,14 @@ const { Search } = Input;
 const DataManagement: React.FC = () => {
   const [previewVisible, setPreviewVisible] = useState(false);
   const [selectedFile, setSelectedFile] = useState<DataFile | null>(null);
-  const [autoUploadCompleted, setAutoUploadCompleted] = useState(false);
   const [visualizationFile, setVisualizationFile] = useState<DataFile | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [chartsPerPage] = useState(6);
   const dispatch = useAppDispatch();
-  const { files, filter, uploadProgress } = useAppSelector((state) => state.data);
+  const { files, filter } = useAppSelector((state) => state.data);
 
-  // 自动上传指定的Excel文件
-  useEffect(() => {
-    const performAutoUpload = async () => {
-      if (autoUploadCompleted) return;
-      
-      const filesToUpload = ['正常数据.xlsx', '质检数据.xlsx'];
-      const filesToUploadFiltered = filesToUpload.filter(fileName => !isFileAlreadyUploaded(fileName));
-      
-      if (filesToUploadFiltered.length > 0) {
-        try {
-          message.info('正在自动上传预设数据文件...');
-          await autoUploadFiles(filesToUploadFiltered);
-          message.success('预设数据文件自动上传完成！');
-        } catch (error) {
-          message.error('自动上传失败，请手动上传文件');
-        }
-      }
-      
-      setAutoUploadCompleted(true);
-    };
-
-    // 延迟1秒后开始自动上传，确保组件完全加载
-    const timer = setTimeout(performAutoUpload, 1000);
-    return () => clearTimeout(timer);
-  }, [autoUploadCompleted]);
-
+  // 自动加载数据
+  const { autoUploadCompleted, isLoading } = useAutoUpload();
 
 
   const handleUpload = async (file: File) => {
@@ -103,20 +77,20 @@ const DataManagement: React.FC = () => {
     };
 
     dispatch(addFile(newFile));
-    dispatch(setUploadProgress(10));
+    // dispatch(setUploadProgress(10));
 
     try {
       // 解析Excel文件
       const parsedData = await parseExcelFile(file);
-      dispatch(setUploadProgress(50));
+      // dispatch(setUploadProgress(50));
       
       // 转换为表格数据
       const tableData = convertToTableData(parsedData);
-      dispatch(setUploadProgress(80));
+      // dispatch(setUploadProgress(80));
       
       // 获取统计信息
       const statistics = getDataStatistics(parsedData);
-      dispatch(setUploadProgress(100));
+      // dispatch(setUploadProgress(100));
       
       // 更新文件状态
       dispatch(updateFile({
@@ -132,15 +106,15 @@ const DataManagement: React.FC = () => {
         },
       }));
       
-      dispatch(setUploadProgress(0));
-      message.success(`${file.name} 解析成功！共 ${parsedData.rowCount} 行数据`);
+      // dispatch(setUploadProgress(0));
+      // message.success(`${file.name} 解析成功！共 ${parsedData.rowCount} 行数据`);
     } catch (error) {
       dispatch(updateFile({
         id: newFile.id,
         updates: { status: 'error' },
       }));
-      dispatch(setUploadProgress(0));
-      message.error(`文件解析失败: ${error}`);
+      // dispatch(setUploadProgress(0));
+      message.error(`${file.name} 解析失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
 
     return false; // 阻止默认上传行为
@@ -409,19 +383,11 @@ const DataManagement: React.FC = () => {
         </Col>
         <Col span={6}>
           <Card>
-            {uploadProgress > 0 && (
-              <div>
-                <Text>上传进度</Text>
-                <Progress percent={uploadProgress} size="small" />
-              </div>
-            )}
-            {uploadProgress === 0 && (
-              <Statistic
-                title="状态"
-                value="就绪"
-                valueStyle={{ color: '#52c41a' }}
-              />
-            )}
+            <Statistic
+              title="状态"
+              value="就绪"
+              valueStyle={{ color: '#52c41a' }}
+            />
           </Card>
         </Col>
       </Row>

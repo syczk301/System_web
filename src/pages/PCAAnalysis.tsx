@@ -30,6 +30,7 @@ import { updateConfig } from '../store/slices/analysisSlice';
 import { addResult, updateResult } from '../store/slices/analysisSlice';
 import type { AnalysisResult } from '../store/slices/analysisSlice';
 import { getNumericColumns } from '../utils/excelParser';
+import { useAutoUpload } from '../hooks/useAutoUpload';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -50,6 +51,9 @@ const PCAAnalysis: React.FC = () => {
   const { files } = useAppSelector((state) => state.data);
   const { config, results } = useAppSelector((state) => state.analysis);
   
+  // 自动加载数据
+  const { autoUploadCompleted, isLoading } = useAutoUpload();
+
   // 获取最新的PCA分析结果 - 按创建时间排序，取最新的完成结果
   const currentResult = results
     .filter(result => result.type === 'pca' && result.status === 'completed')

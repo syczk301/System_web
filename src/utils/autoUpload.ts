@@ -106,7 +106,7 @@ export const autoUploadFile = async (fileName: string): Promise<void> => {
             }));
             
             store.dispatch(setUploadProgress(0));
-            message.success(`${fileName} 自动上传成功！`);
+            // message.success(`${fileName} 自动上传成功！`);
             resolve();
           } catch (parseError) {
             console.error('解析文件失败:', parseError);
@@ -125,7 +125,7 @@ export const autoUploadFile = async (fileName: string): Promise<void> => {
             }));
             
             store.dispatch(setUploadProgress(0));
-            message.success(`${fileName} 自动上传成功！`);
+            // message.success(`${fileName} 自动上传成功！`);
             resolve();
           }
         }
@@ -171,7 +171,7 @@ export const autoUploadFile = async (fileName: string): Promise<void> => {
           }));
           
           store.dispatch(setUploadProgress(0));
-          message.success(`${fileName} 自动上传成功！`);
+          // message.success(`${fileName} 自动上传成功！`);
           resolve();
         }
       }, 300);

@@ -30,6 +30,7 @@ import ReactECharts from 'echarts-for-react';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
 import { removeResult } from '../store/slices/analysisSlice';
 import type { AnalysisResult } from '../store/slices/analysisSlice';
+import { useAutoUpload } from '../hooks/useAutoUpload';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -46,6 +47,9 @@ const Results: React.FC = () => {
   const dispatch = useAppDispatch();
   const { results } = useAppSelector((state) => state.analysis);
   const { files } = useAppSelector((state) => state.data);
+
+  // 自动加载数据
+  const { autoUploadCompleted, isLoading } = useAutoUpload();
 
   const getAnalysisTypeName = (type: string) => {
     const typeMap: Record<string, string> = {
