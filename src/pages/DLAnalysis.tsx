@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Card,
   Form,
@@ -13,31 +13,73 @@ import {
   Tabs,
   message,
   Spin,
-  Radio,
+  Alert,
+  Statistic,
+  Table,
+  Tooltip,
+  Badge,
+  Switch,
 } from 'antd';
 import {
   PlayCircleOutlined,
   StopOutlined,
   DownloadOutlined,
   BarChartOutlined,
+  CheckCircleOutlined,
+  ExclamationCircleOutlined,
+  InfoCircleOutlined,
+  SyncOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import ReactECharts from 'echarts-for-react';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
-import { updateConfig } from '../store/slices/analysisSlice';
+import { updateConfig, setCurrentResult } from '../store/slices/analysisSlice';
 import { addResult, updateResult } from '../store/slices/analysisSlice';
 import type { AnalysisResult } from '../store/slices/analysisSlice';
-import { getNumericColumns } from '../utils/excelParser';
+import { 
+  trainDLModel, 
+  predictAnomalies,
+  extractNumericData,
+  type DLResults,
+  type ProgressCallback,
+  type DLConfig 
+} from '../utils/deepLearning';
+import { exportChartDataToCSV } from '../utils/exportUtils';
 import { useAutoUpload } from '../hooks/useAutoUpload';
 
-const { Title, Text } = Typography;
-const { Option } = Select;
+const { Title, Text, Paragraph } = Typography;
 const { TabPane } = Tabs;
+const { Option } = Select;
+
+interface ProgressMessage {
+  timestamp: string;
+  message: string;
+  type: 'info' | 'success' | 'warning' | 'error';
+}
+
+interface AnomalyPoint {
+  index: number;
+  error: number;
+  timestamp: string;
+}
 
 const DLAnalysis: React.FC = () => {
   const [form] = Form.useForm();
   const [running, setRunning] = useState(false);
+  const [predicting, setPredicting] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentResult, setCurrentResult] = useState<AnalysisResult | null>(null);
+  const [progressMessages, setProgressMessages] = useState<ProgressMessage[]>([]);
+  const [dlResults, setDlResults] = useState<DLResults | null>(null);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
+  const [realTimeDetection, setRealTimeDetection] = useState(false);
+  const [realtimeData, setRealtimeData] = useState<{
+    errors: number[];
+    anomalies: AnomalyPoint[];
+    currentIndex: number;
+  }>({ errors: [], anomalies: [], currentIndex: 0 });
+  
+  const realtimeTimerRef = useRef<NodeJS.Timeout | null>(null);
   const dispatch = useAppDispatch();
   const { files } = useAppSelector((state) => state.data);
   const { config } = useAppSelector((state) => state.analysis);
@@ -45,186 +87,539 @@ const DLAnalysis: React.FC = () => {
   // 自动加载数据
   const { autoUploadCompleted, isLoading } = useAutoUpload();
 
+  // 清理资源
+  useEffect(() => {
+    return () => {
+      if (dlResults?.model) {
+        dlResults.model.dispose();
+      }
+      if (abortController) {
+        abortController.abort();
+      }
+      if (realtimeTimerRef.current) {
+        clearInterval(realtimeTimerRef.current);
+      }
+    };
+  }, [dlResults, abortController]);
+
+
+
+  // 添加进度消息
+  const addProgressMessage = (message: string, type: 'info' | 'success' | 'warning' | 'error' = 'info') => {
+    const newMessage: ProgressMessage = {
+      timestamp: new Date().toLocaleTimeString(),
+      message,
+      type
+    };
+    setProgressMessages(prev => [...prev.slice(-9), newMessage]); // 保留最近10条消息
+  };
+
   const handleAnalysis = async (values: any) => {
     if (!values.dataFile) {
       message.error('请选择数据文件');
       return;
     }
 
-    setRunning(true);
-    setProgress(0);
+    try {
+      setRunning(true);
+      setProgress(0);
+      setProgressMessages([]);
+      setDlResults(null);
 
-    dispatch(updateConfig({ type: 'dl', config: values }));
+      // 创建中止控制器
+      const controller = new AbortController();
+      setAbortController(controller);
 
-    const result: AnalysisResult = {
-      id: Date.now().toString(),
-      type: 'dl',
-      name: `深度学习分析_${new Date().toLocaleString()}`,
-      dataFileId: values.dataFile,
-      parameters: values,
-      results: {},
-      charts: [],
-      status: 'running',
-      progress: 0,
-      createdAt: new Date().toISOString(),
-    };
+      // 保存配置
+      dispatch(updateConfig({ type: 'dl', config: values }));
 
-    dispatch(addResult(result));
-    setCurrentResult(result);
+      // 添加分析结果
+      const result: AnalysisResult = {
+        id: Date.now().toString(),
+        type: 'dl',
+        name: `深度学习分析_${new Date().toLocaleString()}`,
+        dataFileId: values.dataFile,
+        parameters: values,
+        results: {},
+        charts: [],
+        status: 'running',
+        progress: 0,
+        createdAt: new Date().toISOString(),
+      };
 
-    const timer = setInterval(() => {
-      setProgress(prev => {
-        const newProgress = prev + 3;
+      dispatch(addResult(result));
+      setCurrentResult(result);
+
+      addProgressMessage('开始深度学习分析...', 'info');
+
+      // 获取选择的数据文件
+      const selectedFile = files.find(f => f.id === values.dataFile);
+      if (!selectedFile || !selectedFile.rawData) {
+        throw new Error('数据文件不存在或未解析');
+      }
+
+      addProgressMessage('提取数值数据...', 'info');
+      const numericData = extractNumericData(selectedFile.rawData);
+      
+      addProgressMessage(`数据准备完成: ${numericData.length}行 × ${numericData[0].length}列`, 'success');
+
+      // 构建模型配置
+      const dlConfig: DLConfig = {
+        inputDim: numericData[0].length, // 将在训练时更新
+        embedDim: values.embedDim || 16,
+        numHeads: values.numHeads || 2,
+        numLayers: values.numLayers || 3,
+        hiddenDim: values.hiddenDim || 32,
+        dropout: values.dropout || 0.1,
+        epochs: values.epochs || 200,
+        batchSize: values.batchSize || 16,
+        patience: values.patience || 20,
+        variancePercentile: values.variancePercentile || 1
+      };
+
+      // 进度回调
+      const onProgress: ProgressCallback = (epoch, trainLoss, valLoss) => {
+        const progressPercent = Math.min(90, (epoch / dlConfig.epochs) * 90);
+        setProgress(progressPercent);
+        
         dispatch(updateResult({
           id: result.id,
-          updates: { progress: newProgress },
+          updates: { progress: progressPercent },
         }));
 
-        if (newProgress >= 100) {
-          clearInterval(timer);
-          setRunning(false);
-          
-          const mockResults = {
-            trainAccuracy: Array.from({ length: values.epochs }, (_, i) => Math.min(0.95, 0.3 + i * 0.015 + Math.random() * 0.05)),
-            valAccuracy: Array.from({ length: values.epochs }, (_, i) => Math.min(0.92, 0.25 + i * 0.013 + Math.random() * 0.08)),
-            trainLoss: Array.from({ length: values.epochs }, (_, i) => Math.max(0.05, 2.5 * Math.exp(-i * 0.08) + Math.random() * 0.1)),
-            valLoss: Array.from({ length: values.epochs }, (_, i) => Math.max(0.08, 2.8 * Math.exp(-i * 0.07) + Math.random() * 0.15)),
-            predictions: Array.from({ length: 20 }, (_, i) => ({
-              actual: Math.random() > 0.5 ? 'Normal' : 'Abnormal',
-              predicted: Math.random() > 0.3 ? 'Normal' : 'Abnormal',
-              confidence: 0.7 + Math.random() * 0.3,
-            })),
-            attention: Array.from({ length: 10 }, (_, i) => ({
-              feature: `特征${i + 1}`,
-              weight: Math.random(),
-            })),
-            finalAccuracy: 0.89,
-            finalLoss: 0.156,
-          };
-
-          const charts = [
-            {
-              type: 'line',
-              data: {
-                title: '模型准确率',
-                xData: Array.from({ length: values.epochs }, (_, i) => i + 1),
-                trainData: mockResults.trainAccuracy,
-                valData: mockResults.valAccuracy,
-                metric: 'accuracy',
-              },
-            },
-            {
-              type: 'line',
-              data: {
-                title: '模型损失',
-                xData: Array.from({ length: values.epochs }, (_, i) => i + 1),
-                trainData: mockResults.trainLoss,
-                valData: mockResults.valLoss,
-                metric: 'loss',
-              },
-            },
-            {
-              type: 'bar',
-              data: {
-                title: '注意力权重分析',
-                xData: mockResults.attention.map(a => a.feature),
-                yData: mockResults.attention.map(a => a.weight),
-              },
-            },
-          ];
-
-          dispatch(updateResult({
-            id: result.id,
-            updates: {
-              status: 'completed',
-              results: mockResults,
-              charts,
-              completedAt: new Date().toISOString(),
-            },
-          }));
-
-          message.success('深度学习分析完成！');
+        if (epoch % 10 === 0 || epoch <= 5) {
+          addProgressMessage(
+            `Epoch ${epoch}/${dlConfig.epochs}: 训练损失=${trainLoss.toFixed(6)}, 验证损失=${valLoss.toFixed(6)}`,
+            'info'
+          );
         }
-        return newProgress;
-      });
-    }, 600);
+      };
+
+      addProgressMessage('开始训练RATransformer模型...', 'info');
+
+      // 训练模型
+      const results = await trainDLModel(
+        numericData,
+        dlConfig,
+        onProgress,
+        controller.signal
+      );
+
+      setDlResults(results);
+      setProgress(95);
+
+      addProgressMessage('模型训练完成，正在生成结果...', 'success');
+
+      // 生成图表数据
+      const charts = [
+        {
+          type: 'line',
+          data: {
+            title: '训练损失曲线',
+            epochs: Array.from({ length: results.trainLosses.length }, (_, i) => i + 1),
+            trainLosses: results.trainLosses,
+            valLosses: results.valLosses,
+            metric: 'loss'
+          }
+        },
+        {
+          type: 'bar',
+          data: {
+            title: '特征重要性分析',
+            features: results.featureImportance.map(f => `特征${f.index + 1}`),
+            importance: results.featureImportance.map(f => f.importance),
+          }
+        }
+      ];
+
+      if (results.testResults) {
+        charts.push({
+          type: 'scatter',
+          data: {
+            title: '异常检测结果',
+            errors: results.testResults.errors,
+            threshold: results.threshold,
+            anomalies: results.testResults.anomalies
+          }
+        });
+      }
+
+      // 更新结果
+      const finalResults = {
+        trainLosses: results.trainLosses,
+        valLosses: results.valLosses,
+        threshold: results.threshold,
+        featureImportance: results.featureImportance,
+        selectedFeatures: results.selectedFeatures,
+        modelSummary: {
+          totalFeatures: numericData[0].length,
+          selectedFeatures: results.selectedFeatures.length,
+          trainSamples: Math.floor(numericData.length * 0.8 * 0.8),
+          valSamples: Math.floor(numericData.length * 0.8 * 0.2),
+          testSamples: Math.floor(numericData.length * 0.2),
+          finalTrainLoss: results.trainLosses[results.trainLosses.length - 1],
+          finalValLoss: results.valLosses[results.valLosses.length - 1],
+          epochs: results.trainLosses.length
+        },
+        testResults: results.testResults
+      };
+
+      const completedResult: AnalysisResult = {
+        ...result,
+        status: 'completed',
+        results: finalResults,
+        charts,
+        progress: 100,
+        completedAt: new Date().toISOString(),
+      };
+
+      dispatch(updateResult({
+        id: result.id,
+        updates: {
+          status: 'completed',
+          results: finalResults,
+          charts,
+          progress: 100,
+          completedAt: new Date().toISOString(),
+        },
+      }));
+
+      // 同时更新currentResult状态
+      setCurrentResult(completedResult);
+
+      setProgress(100);
+      addProgressMessage('深度学习分析完成！', 'success');
+      message.success('深度学习分析完成！');
+
+    } catch (error: any) {
+      console.error('分析错误:', error);
+      const errorMessage = error.message || '分析过程中发生未知错误';
+      
+      addProgressMessage(`分析失败: ${errorMessage}`, 'error');
+      message.error(`分析失败: ${errorMessage}`);
+      
+      if (currentResult) {
+        const failedResult: AnalysisResult = {
+          ...currentResult,
+          status: 'failed',
+          error: errorMessage,
+        };
+
+        dispatch(updateResult({
+          id: currentResult.id,
+          updates: {
+            status: 'failed',
+            error: errorMessage,
+          },
+        }));
+
+        // 同时更新currentResult状态
+        setCurrentResult(failedResult);
+      }
+    } finally {
+      setRunning(false);
+      setAbortController(null);
+    }
   };
 
-  const getMetricOption = (chartData: any) => ({
+  const handlePredict = async () => {
+    if (!dlResults) {
+      message.error('请先训练模型');
+      return;
+    }
+
+    if (!currentResult?.dataFileId) {
+      message.error('没有数据文件');
+      return;
+    }
+
+    try {
+      setPredicting(true);
+      addProgressMessage('开始异常检测预测...', 'info');
+
+      const selectedFile = files.find(f => f.id === currentResult.dataFileId);
+      if (!selectedFile?.rawData) {
+        throw new Error('数据文件不存在');
+      }
+
+      const numericData = extractNumericData(selectedFile.rawData);
+      
+      const predictionResults = await predictAnomalies(
+        dlResults.model,
+        numericData,
+        dlResults.scaler,
+        dlResults.selectedFeatures,
+        dlResults.threshold
+      );
+
+      // 准备实时检测数据
+      const anomalyPoints: AnomalyPoint[] = [];
+      predictionResults.errors.forEach((error, index) => {
+        if (predictionResults.anomalies[index]) {
+          anomalyPoints.push({
+            index,
+            error,
+            timestamp: new Date(Date.now() + index * 1000).toLocaleTimeString()
+          });
+        }
+      });
+
+      setRealtimeData({
+        errors: predictionResults.errors,
+        anomalies: anomalyPoints,
+        currentIndex: 0
+      });
+
+      addProgressMessage(
+        `检测完成: 发现${anomalyPoints.length}个异常点 (共${predictionResults.errors.length}个样本)`,
+        anomalyPoints.length > 0 ? 'warning' : 'success'
+      );
+
+      message.success('异常检测完成');
+
+    } catch (error: any) {
+      console.error('预测错误:', error);
+      addProgressMessage(`预测失败: ${error.message}`, 'error');
+      message.error(`预测失败: ${error.message}`);
+    } finally {
+      setPredicting(false);
+    }
+  };
+
+  const startRealTimeDetection = () => {
+    if (!realtimeData.errors.length) {
+      message.error('请先进行异常检测');
+      return;
+    }
+
+    setRealTimeDetection(true);
+    setRealtimeData(prev => ({ ...prev, currentIndex: 0 }));
+
+    realtimeTimerRef.current = setInterval(() => {
+      setRealtimeData(prev => {
+        if (prev.currentIndex >= prev.errors.length - 1) {
+          setRealTimeDetection(false);
+          if (realtimeTimerRef.current) {
+            clearInterval(realtimeTimerRef.current);
+          }
+          addProgressMessage('实时检测演示完成', 'success');
+          return prev;
+        }
+        return { ...prev, currentIndex: prev.currentIndex + 1 };
+      });
+    }, 100);
+  };
+
+  const stopRealTimeDetection = () => {
+    setRealTimeDetection(false);
+    if (realtimeTimerRef.current) {
+      clearInterval(realtimeTimerRef.current);
+    }
+  };
+
+  // 图表配置
+  const getLossChartOption = (chartData: any) => ({
     title: {
       text: chartData.title,
       left: 'center',
+      textStyle: { fontSize: 16, fontWeight: 'bold' }
     },
     tooltip: {
       trigger: 'axis',
+      formatter: (params: any) => {
+        const epoch = params[0].axisValue;
+        let result = `Epoch ${epoch}<br/>`;
+        params.forEach((param: any) => {
+          result += `${param.seriesName}: ${param.value.toFixed(6)}<br/>`;
+        });
+        return result;
+      }
     },
     legend: {
-      data: chartData.metric === 'accuracy' ? ['训练准确率', '验证准确率'] : ['训练损失', '验证损失'],
-      top: 30,
+      data: ['训练损失', '验证损失'],
+      top: 35
+    },
+    grid: {
+      left: '3%',
+      right: '4%',
+      bottom: '3%',
+      top: '15%',
+      containLabel: true
     },
     xAxis: {
       type: 'category',
-      data: chartData.xData,
+      data: chartData.epochs,
       name: 'Epoch',
+      nameLocation: 'middle',
+      nameGap: 30
     },
     yAxis: {
       type: 'value',
-      name: chartData.metric === 'accuracy' ? '准确率' : '损失值',
+      name: '损失值',
+      nameLocation: 'middle',
+      nameGap: 50,
+      scale: true
     },
     series: [
       {
-        name: chartData.metric === 'accuracy' ? '训练准确率' : '训练损失',
+        name: '训练损失',
         type: 'line',
-        data: chartData.trainData,
+        data: chartData.trainLosses,
         smooth: true,
-        itemStyle: {
-          color: '#1890ff',
-        },
+        itemStyle: { color: '#1890ff' },
+        lineStyle: { width: 2 }
       },
       {
-        name: chartData.metric === 'accuracy' ? '验证准确率' : '验证损失',
+        name: '验证损失',
         type: 'line',
-        data: chartData.valData,
+        data: chartData.valLosses,
         smooth: true,
-        itemStyle: {
-          color: '#52c41a',
-        },
-      },
-    ],
+        itemStyle: { color: '#52c41a' },
+        lineStyle: { width: 2 }
+      }
+    ]
   });
 
-  const getBarOption = (chartData: any) => ({
+  const getFeatureImportanceOption = (chartData: any) => ({
     title: {
       text: chartData.title,
       left: 'center',
+      textStyle: { fontSize: 16, fontWeight: 'bold' }
     },
     tooltip: {
       trigger: 'axis',
+      formatter: (params: any) => {
+        const feature = params[0].axisValue;
+        const importance = params[0].value;
+        return `${feature}<br/>重要性: ${importance.toFixed(6)}`;
+      }
+    },
+    grid: {
+      left: '3%',
+      right: '4%',
+      bottom: '3%',
+      top: '15%',
+      containLabel: true
     },
     xAxis: {
       type: 'category',
-      data: chartData.xData,
+      data: chartData.features,
+      name: '特征',
+      nameLocation: 'middle',
+      nameGap: 30,
+      axisLabel: {
+        rotate: 45
+      }
     },
     yAxis: {
       type: 'value',
-      name: '注意力权重',
+      name: '重要性分数',
+      nameLocation: 'middle',
+      nameGap: 50
     },
     series: [
       {
-        name: '权重',
+        name: '重要性',
         type: 'bar',
-        data: chartData.yData,
-        itemStyle: {
-          color: '#722ed1',
-        },
-      },
-    ],
+        data: chartData.importance,
+        itemStyle: { 
+          color: new Array(chartData.importance.length).fill(0).map((_, i) => {
+            const colors = ['#722ed1', '#13c2c2', '#52c41a', '#faad14', '#f5222d'];
+            return colors[i % colors.length];
+          })
+        }
+      }
+    ]
   });
+
+  const getRealtimeDetectionOption = () => {
+    const currentErrors = realtimeData.errors.slice(0, realtimeData.currentIndex + 1);
+    const currentIndices = Array.from({ length: currentErrors.length }, (_, i) => i);
+    
+    const anomalyData = realtimeData.anomalies
+      .filter(a => a.index <= realtimeData.currentIndex)
+      .map(a => [a.index, a.error]);
+
+    return {
+      title: {
+        text: '实时异常检测',
+        left: 'center',
+        textStyle: { fontSize: 16, fontWeight: 'bold' }
+      },
+      tooltip: {
+        trigger: 'axis',
+        formatter: (params: any) => {
+          const index = params[0].axisValue;
+          const error = params[0].value;
+          const isAnomaly = error > dlResults?.threshold;
+          return `样本 ${index}<br/>重构误差: ${error?.toFixed(6)}<br/>状态: ${isAnomaly ? '异常' : '正常'}`;
+        }
+      },
+      legend: {
+        data: ['重构误差', '控制限', '异常点'],
+        top: 35
+      },
+      grid: {
+        left: '3%',
+        right: '4%',
+        bottom: '3%',
+        top: '15%',
+        containLabel: true
+      },
+      xAxis: {
+        type: 'category',
+        data: currentIndices,
+        name: '样本编号',
+        nameLocation: 'middle',
+        nameGap: 30
+      },
+      yAxis: {
+        type: 'value',
+        name: '重构误差',
+        nameLocation: 'middle',
+        nameGap: 50
+      },
+      series: [
+        {
+          name: '重构误差',
+          type: 'line',
+          data: currentErrors,
+          itemStyle: { color: '#1890ff' },
+          lineStyle: { width: 1 },
+          symbol: 'circle',
+          symbolSize: 4
+        },
+        {
+          name: '控制限',
+          type: 'line',
+          data: new Array(currentErrors.length).fill(dlResults?.threshold),
+          itemStyle: { color: '#f5222d' },
+          lineStyle: { type: 'dashed', width: 2 },
+          symbol: 'none'
+        },
+        {
+          name: '异常点',
+          type: 'scatter',
+          data: anomalyData,
+          itemStyle: { color: '#ff4d4f' },
+          symbolSize: 8,
+          symbol: 'diamond'
+        }
+      ]
+    };
+  };
+
+  const stopTraining = () => {
+    if (abortController) {
+      abortController.abort();
+      addProgressMessage('用户取消训练', 'warning');
+    }
+  };
 
   return (
     <div className="space-y-6">
       <div className="flex justify-between items-center">
-        <Title level={3}>深度学习分析</Title>
+        <Title level={3}>深度学习检测</Title>
         <Space>
           <Button icon={<DownloadOutlined />}>导出结果</Button>
           <Button type="primary" icon={<BarChartOutlined />}>查看历史</Button>
@@ -233,11 +628,22 @@ const DLAnalysis: React.FC = () => {
 
       <Row gutter={16}>
         <Col span={8}>
-          <Card title="模型配置">
+          <Card title="模型配置" className="h-full">
             <Form
               form={form}
               layout="vertical"
-              initialValues={config.dl}
+              initialValues={{
+                epochs: 200,
+                batchSize: 16,
+                embedDim: 16,
+                numHeads: 2,
+                numLayers: 3,
+                hiddenDim: 32,
+                dropout: 0.1,
+                patience: 20,
+                variancePercentile: 1,
+                ...config.dl
+              }}
               onFinish={handleAnalysis}
             >
               <Form.Item
@@ -246,201 +652,403 @@ const DLAnalysis: React.FC = () => {
                 rules={[{ required: true, message: '请选择数据文件' }]}
               >
                 <Select placeholder="选择数据文件">
-                  {files.filter(f => f.status === 'success').map(file => (
+                  {files.filter(f => f.status === 'success' && f.rawData).map(file => (
                     <Option key={file.id} value={file.id}>
-                      {file.name}
+                      {file.name} ({file.rowCount} 行 × {file.columnCount} 列)
                     </Option>
                   ))}
                 </Select>
               </Form.Item>
 
-              <Form.Item
-                name="modelType"
-                label="模型类型"
-                rules={[{ required: true, message: '请选择模型类型' }]}
-              >
-                <Radio.Group>
-                  <Radio.Button value="transformer">Transformer</Radio.Button>
-                  <Radio.Button value="lstm">LSTM</Radio.Button>
-                  <Radio.Button value="cnn">CNN</Radio.Button>
-                </Radio.Group>
-              </Form.Item>
+              <Row gutter={8}>
+                <Col span={12}>
+                  <Form.Item name="epochs" label="训练轮数">
+                    <InputNumber
+                      min={1}
+                      max={1000}
+                      className="w-full"
+                      placeholder="200"
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="batchSize" label="批次大小">
+                    <InputNumber
+                      min={1}
+                      max={128}
+                      className="w-full"
+                      placeholder="16"
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
 
-              <Form.Item
-                name="hiddenSize"
-                label="隐藏层大小"
-                rules={[{ required: true, message: '请输入隐藏层大小' }]}
-              >
-                <InputNumber
-                  min={32}
-                  max={1024}
-                  className="w-full"
-                  placeholder="隐藏层大小"
-                />
-              </Form.Item>
+              <Row gutter={8}>
+                <Col span={12}>
+                  <Form.Item name="embedDim" label="嵌入维度">
+                    <InputNumber
+                      min={8}
+                      max={128}
+                      className="w-full"
+                      placeholder="16"
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="numHeads" label="注意力头数">
+                    <InputNumber
+                      min={1}
+                      max={8}
+                      className="w-full"
+                      placeholder="2"
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
 
-              <Form.Item
-                name="numLayers"
-                label="网络层数"
-              >
-                <InputNumber
-                  min={1}
-                  max={12}
-                  className="w-full"
-                  placeholder="网络层数"
-                />
-              </Form.Item>
-
-              <Form.Item
-                name="epochs"
-                label="训练轮数"
-              >
-                <InputNumber
-                  min={10}
-                  max={200}
-                  className="w-full"
-                  placeholder="训练轮数"
-                />
-              </Form.Item>
+              <Row gutter={8}>
+                <Col span={12}>
+                  <Form.Item name="numLayers" label="网络层数">
+                    <InputNumber
+                      min={1}
+                      max={12}
+                      className="w-full"
+                      placeholder="3"
+                    />
+                  </Form.Item>
+                </Col>
+                <Col span={12}>
+                  <Form.Item name="hiddenDim" label="隐藏层维度">
+                    <InputNumber
+                      min={16}
+                      max={512}
+                      className="w-full"
+                      placeholder="32"
+                    />
+                  </Form.Item>
+                </Col>
+              </Row>
 
               <Form.Item>
-                <Space className="w-full">
+                <Space className="w-full" direction="vertical">
                   <Button
                     type="primary"
                     htmlType="submit"
                     loading={running}
                     icon={<PlayCircleOutlined />}
                     disabled={running}
+                    className="w-full"
                   >
-                    开始训练
+                    训练模型
                   </Button>
                   <Button
                     danger
                     icon={<StopOutlined />}
                     disabled={!running}
-                    onClick={() => setRunning(false)}
+                    onClick={stopTraining}
+                    className="w-full"
                   >
                     停止训练
                   </Button>
                 </Space>
               </Form.Item>
+
+              {dlResults && (
+                <Form.Item>
+                  <Space className="w-full" direction="vertical">
+                    <Button
+                      type="default"
+                      loading={predicting}
+                      icon={<SyncOutlined />}
+                      disabled={predicting || running}
+                      onClick={handlePredict}
+                      className="w-full"
+                    >
+                      检测异常
+                    </Button>
+                    <div className="flex items-center space-x-2">
+                      <Switch
+                        checked={realTimeDetection}
+                        onChange={(checked) => {
+                          if (checked) {
+                            startRealTimeDetection();
+                          } else {
+                            stopRealTimeDetection();
+                          }
+                        }}
+                        disabled={!realtimeData.errors.length}
+                      />
+                      <Text className="text-sm">实时检测演示</Text>
+                    </div>
+                  </Space>
+                </Form.Item>
+              )}
             </Form>
+
+            {/* 进度条和状态 */}
+            {running && (
+              <div className="mt-4">
+                <Progress 
+                  percent={progress} 
+                  status={progress === 100 ? 'success' : 'active'}
+                  strokeColor={{
+                    '0%': '#108ee9',
+                    '100%': '#87d068',
+                  }}
+                />
+                <div className="mt-2 max-h-32 overflow-y-auto">
+                  {progressMessages.slice(-3).map((msg, index) => (
+                    <div key={index} className="text-xs text-gray-600 mb-1">
+                      <Badge 
+                        status={msg.type === 'error' ? 'error' : msg.type === 'success' ? 'success' : 'processing'}
+                        text={`${msg.timestamp}: ${msg.message}`}
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </Card>
         </Col>
 
         <Col span={16}>
-          <Card title="训练结果">
+          <Card title="分析结果" className="h-full">
+
             {running && (
               <div className="text-center py-8">
                 <Spin size="large" />
                 <div className="mt-4">
-                  <Text>正在训练深度学习模型...</Text>
-                  <Progress percent={progress} className="mt-2" />
+                  <Text>正在训练RATransformer模型...</Text>
+                  <div className="mt-2">
+                    <Text type="secondary">
+                      {progressMessages.length > 0 && progressMessages[progressMessages.length - 1].message}
+                    </Text>
+                  </div>
                 </div>
               </div>
             )}
 
             {!running && currentResult && currentResult.status === 'completed' && (
-              <Tabs defaultActiveKey="metrics">
-                <TabPane tab="训练指标" key="metrics">
+              <Tabs defaultActiveKey="training">
+                <TabPane tab="训练结果" key="training">
                   <Row gutter={[16, 16]}>
-                    <Col span={12}>
+                    <Col span={24}>
                       <ReactECharts
-                        option={getMetricOption(currentResult.charts[0].data)}
-                        style={{ height: '300px' }}
-                      />
-                    </Col>
-                    <Col span={12}>
-                      <ReactECharts
-                        option={getMetricOption(currentResult.charts[1].data)}
+                        option={getLossChartOption(currentResult.charts[0].data)}
                         style={{ height: '300px' }}
                       />
                     </Col>
                   </Row>
                   
                   <Row gutter={16} className="mt-4">
-                    <Col span={12}>
-                      <Card type="inner" title="模型参数">
-                        <div className="space-y-2">
-                          <div className="flex justify-between">
-                            <Text>模型类型:</Text>
-                            <Text strong>{currentResult.parameters.modelType.toUpperCase()}</Text>
-                          </div>
-                          <div className="flex justify-between">
-                            <Text>隐藏层大小:</Text>
-                            <Text strong>{currentResult.parameters.hiddenSize}</Text>
-                          </div>
-                          <div className="flex justify-between">
-                            <Text>网络层数:</Text>
-                            <Text strong>{currentResult.parameters.numLayers}</Text>
-                          </div>
-                          <div className="flex justify-between">
-                            <Text>训练轮数:</Text>
-                            <Text strong>{currentResult.parameters.epochs}</Text>
-                          </div>
-                        </div>
+                    <Col span={8}>
+                      <Card type="inner" title="模型统计">
+                        <Statistic 
+                          title="总特征数" 
+                          value={currentResult.results.modelSummary.totalFeatures} 
+                          prefix={<InfoCircleOutlined />}
+                        />
+                        <Statistic 
+                          title="选择特征数" 
+                          value={currentResult.results.modelSummary.selectedFeatures} 
+                          prefix={<CheckCircleOutlined />}
+                          className="mt-2"
+                        />
+                        <Statistic 
+                          title="训练样本" 
+                          value={currentResult.results.modelSummary.trainSamples} 
+                          className="mt-2"
+                        />
                       </Card>
                     </Col>
-                    <Col span={12}>
-                      <Card type="inner" title="最终结果">
-                        <div className="space-y-2">
-                          <div className="flex justify-between">
-                            <Text>最终准确率:</Text>
-                            <Text strong>{(currentResult.results.finalAccuracy * 100).toFixed(2)}%</Text>
-                          </div>
-                          <div className="flex justify-between">
-                            <Text>最终损失:</Text>
-                            <Text strong>{currentResult.results.finalLoss.toFixed(4)}</Text>
-                          </div>
-                          <div className="flex justify-between">
-                            <Text>模型状态:</Text>
-                            <Text strong className="text-green-600">已收敛</Text>
-                          </div>
-                        </div>
+                    <Col span={8}>
+                      <Card type="inner" title="训练指标">
+                        <Statistic 
+                          title="训练轮数" 
+                          value={currentResult.results.modelSummary.epochs} 
+                          suffix="epochs"
+                        />
+                        <Statistic 
+                          title="最终训练损失" 
+                          value={currentResult.results.modelSummary.finalTrainLoss.toFixed(6)} 
+                          className="mt-2"
+                        />
+                        <Statistic 
+                          title="最终验证损失" 
+                          value={currentResult.results.modelSummary.finalValLoss.toFixed(6)} 
+                          className="mt-2"
+                        />
+                      </Card>
+                    </Col>
+                    <Col span={8}>
+                      <Card type="inner" title="检测配置">
+                        <Statistic 
+                          title="控制限" 
+                          value={currentResult.results.threshold.toFixed(6)} 
+                          prefix={<ExclamationCircleOutlined />}
+                        />
+                        {currentResult.results.testResults && (
+                          <Statistic 
+                            title="测试准确率" 
+                            value={(currentResult.results.testResults.accuracy * 100).toFixed(2)} 
+                            suffix="%"
+                            className="mt-2"
+                          />
+                        )}
                       </Card>
                     </Col>
                   </Row>
                 </TabPane>
 
-                <TabPane tab="注意力分析" key="attention">
+                <TabPane tab="特征分析" key="features">
                   <Row gutter={[16, 16]}>
                     <Col span={24}>
                       <ReactECharts
-                        option={getBarOption(currentResult.charts[2].data)}
+                        option={getFeatureImportanceOption(currentResult.charts[1].data)}
                         style={{ height: '400px' }}
                       />
                     </Col>
                   </Row>
                   
-                  <Card type="inner" title="特征重要性" className="mt-4">
-                    <Text type="secondary">
-                      基于注意力机制分析各特征对模型预测的重要性。权重越高表示该特征对最终预测结果的影响越大。
-                    </Text>
+                  <Card type="inner" title="特征重要性排序" className="mt-4">
+                    <Table
+                      size="small"
+                      dataSource={currentResult.results.featureImportance.slice(0, 10)}
+                      pagination={false}
+                      columns={[
+                        {
+                          title: '排名',
+                          key: 'rank',
+                          render: (_, __, index) => index + 1,
+                          width: 60
+                        },
+                        {
+                          title: '特征索引',
+                          dataIndex: 'index',
+                          render: (index) => `特征${index + 1}`
+                        },
+                        {
+                          title: '重要性分数',
+                          dataIndex: 'importance',
+                          render: (importance) => importance.toFixed(6)
+                        }
+                      ]}
+                    />
                   </Card>
                 </TabPane>
 
-                <TabPane tab="预测结果" key="predictions">
-                  <div className="space-y-4">
-                    <Card type="inner" title="预测样本">
-                      <div className="grid grid-cols-2 gap-4">
-                        {currentResult.results.predictions.slice(0, 8).map((pred: any, index: number) => (
-                          <div key={index} className="p-3 border rounded">
-                            <div className="flex justify-between items-center">
-                              <Text>样本 {index + 1}</Text>
-                              <Text strong className={pred.actual === pred.predicted ? 'text-green-600' : 'text-red-600'}>
-                                {pred.actual === pred.predicted ? '✓' : '✗'}
-                              </Text>
-                            </div>
-                            <div className="text-sm text-gray-600 mt-1">
-                              <div>实际: {pred.actual}</div>
-                              <div>预测: {pred.predicted}</div>
-                              <div>置信度: {(pred.confidence * 100).toFixed(1)}%</div>
-                            </div>
+                <TabPane tab="异常检测" key="detection">
+                  {realTimeDetection || realtimeData.errors.length > 0 ? (
+                    <div>
+                      <Row gutter={[16, 16]}>
+                        <Col span={24}>
+                          <ReactECharts
+                            option={getRealtimeDetectionOption()}
+                            style={{ height: '400px' }}
+                          />
+                        </Col>
+                      </Row>
+                      
+                      <Row gutter={16} className="mt-4">
+                        <Col span={12}>
+                          <Card type="inner" title="检测统计">
+                            <Statistic 
+                              title="总样本数" 
+                              value={realtimeData.errors.length} 
+                            />
+                            <Statistic 
+                              title="异常样本数" 
+                              value={realtimeData.anomalies.length} 
+                              valueStyle={{ color: realtimeData.anomalies.length > 0 ? '#cf1322' : '#3f8600' }}
+                              className="mt-2"
+                            />
+                            <Statistic 
+                              title="异常率" 
+                              value={realtimeData.errors.length > 0 ? (realtimeData.anomalies.length / realtimeData.errors.length * 100).toFixed(2) : 0} 
+                              suffix="%"
+                              valueStyle={{ color: realtimeData.anomalies.length > 0 ? '#cf1322' : '#3f8600' }}
+                              className="mt-2"
+                            />
+                          </Card>
+                        </Col>
+                        <Col span={12}>
+                          <Card type="inner" title="当前状态">
+                            <Statistic 
+                              title="当前样本" 
+                              value={realTimeDetection ? realtimeData.currentIndex + 1 : realtimeData.errors.length} 
+                              suffix={`/ ${realtimeData.errors.length}`}
+                            />
+                            {realTimeDetection && (
+                              <div className="mt-2">
+                                <Badge status="processing" text="实时检测中..." />
+                              </div>
+                            )}
+                          </Card>
+                        </Col>
+                      </Row>
+
+                      {realtimeData.anomalies.length > 0 && (
+                        <Card type="inner" title="异常点详情" className="mt-4">
+                          <Table
+                            size="small"
+                            dataSource={realtimeData.anomalies.slice(0, 10)}
+                            pagination={false}
+                            columns={[
+                              {
+                                title: '样本编号',
+                                dataIndex: 'index',
+                                width: 100
+                              },
+                              {
+                                title: '重构误差',
+                                dataIndex: 'error',
+                                render: (error) => error.toFixed(6)
+                              },
+                              {
+                                title: '严重程度',
+                                dataIndex: 'error',
+                                render: (error) => {
+                                  const severity = error / (dlResults?.threshold || 1);
+                                  if (severity > 3) return <Badge status="error" text="严重" />;
+                                  if (severity > 2) return <Badge status="warning" text="中等" />;
+                                  return <Badge status="default" text="轻微" />;
+                                }
+                              }
+                            ]}
+                          />
+                        </Card>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="text-center py-8 text-gray-500">
+                      <ThunderboltOutlined className="text-4xl mb-4" />
+                      <div>请先训练模型并进行异常检测</div>
+                    </div>
+                  )}
+                </TabPane>
+
+                <TabPane tab="训练日志" key="logs">
+                  <Card type="inner" title="训练过程日志">
+                    <div className="max-h-96 overflow-y-auto">
+                      {progressMessages.map((msg, index) => (
+                        <div key={index} className="mb-2 p-2 rounded" style={{
+                          backgroundColor: msg.type === 'error' ? '#fff2f0' : 
+                                         msg.type === 'success' ? '#f6ffed' : 
+                                         msg.type === 'warning' ? '#fffbf0' : '#f0f9ff'
+                        }}>
+                          <div className="flex items-center space-x-2">
+                            <Badge 
+                              status={msg.type === 'error' ? 'error' : 
+                                     msg.type === 'success' ? 'success' : 
+                                     msg.type === 'warning' ? 'warning' : 'processing'} 
+                            />
+                            <Text className="text-xs text-gray-500">{msg.timestamp}</Text>
                           </div>
-                        ))}
-                      </div>
-                    </Card>
-                  </div>
+                          <Text className="text-sm">{msg.message}</Text>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
                 </TabPane>
               </Tabs>
             )}
@@ -449,7 +1057,24 @@ const DLAnalysis: React.FC = () => {
               <div className="text-center py-8 text-gray-500">
                 <BarChartOutlined className="text-4xl mb-4" />
                 <div>请配置模型参数并开始训练</div>
+                <Paragraph className="mt-4 text-sm">
+                  基于RATransformer的深度学习异常检测模型，支持：
+                  <br />• 自动特征选择和数据预处理
+                  <br />• 多头自注意力机制
+                  <br />• 实时训练监控和早停
+                  <br />• 智能异常检测和可视化
+                </Paragraph>
               </div>
+            )}
+
+            {currentResult && currentResult.status === 'failed' && (
+              <Alert
+                type="error"
+                message="分析失败"
+                description={currentResult.error}
+                showIcon
+                className="mb-4"
+              />
             )}
           </Card>
         </Col>
