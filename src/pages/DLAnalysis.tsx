@@ -63,6 +63,11 @@ interface AnomalyPoint {
   timestamp: string;
 }
 
+// 计算百分比并返回整数
+const calculatePercentageInt = (value: number): number => {
+  return Math.round(value * 100);
+};
+
 const DLAnalysis: React.FC = () => {
   const [form] = Form.useForm();
   const [running, setRunning] = useState(false);
@@ -72,7 +77,7 @@ const DLAnalysis: React.FC = () => {
   const [progressMessages, setProgressMessages] = useState<ProgressMessage[]>([]);
   const [dlResults, setDlResults] = useState<DLResults | null>(null);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
-  const [realTimeDetection, setRealTimeDetection] = useState(false);
+  const [realTimeDetection, setRealTimeDetection] = useState(true);
   const [realtimeData, setRealtimeData] = useState<{
     errors: number[];
     anomalies: AnomalyPoint[];
@@ -179,7 +184,7 @@ const DLAnalysis: React.FC = () => {
 
       // 进度回调
       const onProgress: ProgressCallback = (epoch, trainLoss, valLoss) => {
-        const progressPercent = Math.min(90, (epoch / dlConfig.epochs) * 90);
+        const progressPercent = Math.min(90, Math.round((epoch / dlConfig.epochs) * 90));
         setProgress(progressPercent);
         
         dispatch(updateResult({
@@ -188,8 +193,10 @@ const DLAnalysis: React.FC = () => {
         }));
 
         if (epoch % 10 === 0 || epoch <= 5) {
+          const formattedTrainLoss = trainLoss < 0.001 ? trainLoss.toExponential(3) : trainLoss.toFixed(3);
+          const formattedValLoss = valLoss < 0.001 ? valLoss.toExponential(3) : valLoss.toFixed(3);
           addProgressMessage(
-            `Epoch ${epoch}/${dlConfig.epochs}: 训练损失=${trainLoss.toFixed(6)}, 验证损失=${valLoss.toFixed(6)}`,
+            `Epoch ${epoch}/${dlConfig.epochs}: 训练损失=${formattedTrainLoss}, 验证损失=${formattedValLoss}`,
             'info'
           );
         }
@@ -290,6 +297,11 @@ const DLAnalysis: React.FC = () => {
       setProgress(100);
       addProgressMessage('深度学习分析完成！', 'success');
       message.success('深度学习分析完成！');
+      
+      // 训练完成后自动进行异常检测
+      setTimeout(() => {
+        handlePredict();
+      }, 500);
 
     } catch (error: any) {
       console.error('分析错误:', error);
@@ -376,6 +388,13 @@ const DLAnalysis: React.FC = () => {
       );
 
       message.success('异常检测完成');
+      
+      // 异常检测完成后，如果实时检测开关已开启，自动开始实时检测演示
+      if (realTimeDetection && predictionResults.errors.length > 0) {
+        setTimeout(() => {
+          startRealTimeDetection();
+        }, 1000);
+      }
 
     } catch (error: any) {
       console.error('预测错误:', error);
@@ -533,12 +552,15 @@ const DLAnalysis: React.FC = () => {
   });
 
   const getRealtimeDetectionOption = () => {
-    const currentErrors = realtimeData.errors.slice(0, realtimeData.currentIndex + 1);
-    const currentIndices = Array.from({ length: currentErrors.length }, (_, i) => i);
+    // 如果实时检测正在运行，显示到当前索引；否则显示所有数据
+    const endIndex = realTimeDetection ? realtimeData.currentIndex + 1 : realtimeData.errors.length;
+    const currentErrors = realtimeData.errors.slice(0, endIndex);
+    // 横轴显示样本编号，从1开始
+    const currentIndices = Array.from({ length: currentErrors.length }, (_, i) => i + 1);
     
     const anomalyData = realtimeData.anomalies
-      .filter(a => a.index <= realtimeData.currentIndex)
-      .map(a => [a.index, a.error]);
+      .filter(a => a.index < endIndex)
+      .map(a => [a.index + 1, a.error]); // 异常点的横轴也要从1开始
 
     return {
       title: {
@@ -552,7 +574,9 @@ const DLAnalysis: React.FC = () => {
           const index = params[0].axisValue;
           const error = params[0].value;
           const isAnomaly = error > dlResults?.threshold;
-          return `样本 ${index}<br/>重构误差: ${error?.toFixed(6)}<br/>状态: ${isAnomaly ? '异常' : '正常'}`;
+          // 智能格式化数值：如果数值很小，显示科学计数法；否则显示3位小数
+          const formattedError = error < 0.001 ? error?.toExponential(3) : error?.toFixed(3);
+          return `样本 ${index}<br/>重构误差: ${formattedError}<br/>状态: ${isAnomaly ? '异常' : '正常'}`;
         }
       },
       legend: {
@@ -577,7 +601,14 @@ const DLAnalysis: React.FC = () => {
         type: 'value',
         name: '重构误差',
         nameLocation: 'middle',
-        nameGap: 50
+        nameGap: 50,
+        axisLabel: {
+          formatter: (value: number) => {
+            if (value === 0) return '0';
+            if (value < 0.001) return value.toExponential(1);
+            return value.toFixed(3);
+          }
+        }
       },
       series: [
         {
@@ -785,18 +816,26 @@ const DLAnalysis: React.FC = () => {
               )}
             </Form>
 
+
+          </Card>
+        </Col>
+
+        <Col span={16}>
+          <Card title="分析结果" className="h-full">
+
             {/* 进度条和状态 */}
             {running && (
-              <div className="mt-4">
+              <div className="mb-4">
                 <Progress 
-                  percent={progress} 
+                  percent={Math.round(progress)} 
                   status={progress === 100 ? 'success' : 'active'}
                   strokeColor={{
                     '0%': '#108ee9',
                     '100%': '#87d068',
                   }}
+                  format={(percent) => `${Math.round(percent || 0)}%`}
                 />
-                <div className="mt-2 max-h-32 overflow-y-auto">
+                <div className="mt-3 max-h-32 overflow-y-auto">
                   {progressMessages.slice(-3).map((msg, index) => (
                     <div key={index} className="text-xs text-gray-600 mb-1">
                       <Badge 
@@ -806,23 +845,15 @@ const DLAnalysis: React.FC = () => {
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
-          </Card>
-        </Col>
-
-        <Col span={16}>
-          <Card title="分析结果" className="h-full">
-
-            {running && (
-              <div className="text-center py-8">
-                <Spin size="large" />
-                <div className="mt-4">
-                  <Text>正在训练RATransformer模型...</Text>
-                  <div className="mt-2">
-                    <Text type="secondary">
-                      {progressMessages.length > 0 && progressMessages[progressMessages.length - 1].message}
-                    </Text>
+                <div className="text-center py-8">
+                  <Spin size="large" />
+                  <div className="mt-4">
+                    <Text>正在训练RATransformer模型...</Text>
+                    <div className="mt-2">
+                      <Text type="secondary">
+                        {progressMessages.length > 0 && progressMessages[progressMessages.length - 1].message}
+                      </Text>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -870,12 +901,12 @@ const DLAnalysis: React.FC = () => {
                         />
                         <Statistic 
                           title="最终训练损失" 
-                          value={currentResult.results.modelSummary.finalTrainLoss.toFixed(6)} 
+                          value={currentResult.results.modelSummary.finalTrainLoss < 0.001 ? currentResult.results.modelSummary.finalTrainLoss.toExponential(3) : currentResult.results.modelSummary.finalTrainLoss.toFixed(3)} 
                           className="mt-2"
                         />
                         <Statistic 
                           title="最终验证损失" 
-                          value={currentResult.results.modelSummary.finalValLoss.toFixed(6)} 
+                          value={currentResult.results.modelSummary.finalValLoss < 0.001 ? currentResult.results.modelSummary.finalValLoss.toExponential(3) : currentResult.results.modelSummary.finalValLoss.toFixed(3)} 
                           className="mt-2"
                         />
                       </Card>
@@ -884,13 +915,13 @@ const DLAnalysis: React.FC = () => {
                       <Card type="inner" title="检测配置">
                         <Statistic 
                           title="控制限" 
-                          value={currentResult.results.threshold.toFixed(6)} 
+                          value={currentResult.results.threshold < 0.001 ? currentResult.results.threshold.toExponential(3) : currentResult.results.threshold.toFixed(3)} 
                           prefix={<ExclamationCircleOutlined />}
                         />
                         {currentResult.results.testResults && (
                           <Statistic 
                             title="测试准确率" 
-                            value={(currentResult.results.testResults.accuracy * 100).toFixed(2)} 
+                            value={calculatePercentageInt(currentResult.results.testResults.accuracy)} 
                             suffix="%"
                             className="mt-2"
                           />
@@ -930,7 +961,7 @@ const DLAnalysis: React.FC = () => {
                         {
                           title: '重要性分数',
                           dataIndex: 'importance',
-                          render: (importance) => importance.toFixed(6)
+                          render: (importance) => importance < 0.001 ? importance.toExponential(3) : importance.toFixed(3)
                         }
                       ]}
                     />
@@ -964,7 +995,7 @@ const DLAnalysis: React.FC = () => {
                             />
                             <Statistic 
                               title="异常率" 
-                              value={realtimeData.errors.length > 0 ? (realtimeData.anomalies.length / realtimeData.errors.length * 100).toFixed(2) : 0} 
+                              value={realtimeData.errors.length > 0 ? calculatePercentageInt(realtimeData.anomalies.length / realtimeData.errors.length) : 0} 
                               suffix="%"
                               valueStyle={{ color: realtimeData.anomalies.length > 0 ? '#cf1322' : '#3f8600' }}
                               className="mt-2"
@@ -1002,7 +1033,7 @@ const DLAnalysis: React.FC = () => {
                               {
                                 title: '重构误差',
                                 dataIndex: 'error',
-                                render: (error) => error.toFixed(6)
+                                render: (error) => error < 0.001 ? error.toExponential(3) : error.toFixed(3)
                               },
                               {
                                 title: '严重程度',
