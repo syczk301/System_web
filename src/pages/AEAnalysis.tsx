@@ -222,7 +222,8 @@ const AEAnalysis: React.FC = () => {
       const analysisResults = await runFaultDetection(
         numericData,
         progressCallback,
-        values.epochs || 150
+        values.epochs || 150,
+        true // 始终使用全部数据进行异常检测
       );
       
       if (analysisResults && !controller.signal.aborted) {
@@ -711,14 +712,6 @@ const AEAnalysis: React.FC = () => {
           </Button>
         </Space>
       </div>
-
-      <Alert
-        message="前端机器学习模式"
-        description="使用TensorFlow.js在浏览器中直接运行自动编码器分析，无需后端服务，数据安全处理在本地完成。"
-        type="success"
-        showIcon
-        closable
-      />
 
       <Row gutter={16}>
         <Col span={8}>

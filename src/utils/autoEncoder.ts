@@ -219,7 +219,7 @@ export class AEAnalyzer {
   /**
    * 数据预处理 - 分割训练集和测试集
    */
-  preprocessData(data: number[][], testSize: number = 0.2): {
+  preprocessData(data: number[][], testSize: number = 0.2, useAllDataForDetection: boolean = false): {
     XTrain: number[][];
     XTest: number[][];
   } {
@@ -227,19 +227,34 @@ export class AEAnalyzer {
       // 标准化数据
       const XScaled = this.scaler.fitTransform(data);
 
-      // 简单的训练测试集分割
-      const trainSize = Math.floor(XScaled.length * (1 - testSize));
-      const shuffledIndices = Array.from({ length: XScaled.length }, (_, i) => i)
-        .sort(() => Math.random() - 0.5);
+      if (useAllDataForDetection) {
+        // 用全部数据进行异常检测
+        // 训练集用80%数据，检测用全部数据
+        const trainSize = Math.floor(XScaled.length * 0.8);
+        const shuffledIndices = Array.from({ length: XScaled.length }, (_, i) => i)
+          .sort(() => Math.random() - 0.5);
 
-      const trainIndices = shuffledIndices.slice(0, trainSize);
-      const testIndices = shuffledIndices.slice(trainSize);
+        const trainIndices = shuffledIndices.slice(0, trainSize);
+        const XTrain = trainIndices.map(i => XScaled[i]);
+        const XTest = XScaled; // 用全部数据进行检测
 
-      const XTrain = trainIndices.map(i => XScaled[i]);
-      const XTest = testIndices.map(i => XScaled[i]);
+        console.log(`数据预处理完成 - 训练集: ${XTrain.length}, 检测集: ${XTest.length} (全部数据)`);
+        return { XTrain, XTest };
+      } else {
+        // 传统的训练测试集分割
+        const trainSize = Math.floor(XScaled.length * (1 - testSize));
+        const shuffledIndices = Array.from({ length: XScaled.length }, (_, i) => i)
+          .sort(() => Math.random() - 0.5);
 
-      console.log(`数据预处理完成 - 训练集: ${XTrain.length}, 测试集: ${XTest.length}`);
-      return { XTrain, XTest };
+        const trainIndices = shuffledIndices.slice(0, trainSize);
+        const testIndices = shuffledIndices.slice(trainSize);
+
+        const XTrain = trainIndices.map(i => XScaled[i]);
+        const XTest = testIndices.map(i => XScaled[i]);
+
+        console.log(`数据预处理完成 - 训练集: ${XTrain.length}, 测试集: ${XTest.length}`);
+        return { XTrain, XTest };
+      }
     } catch (error) {
       console.error('数据预处理失败:', error);
       throw error;
@@ -407,7 +422,8 @@ export class AEAnalyzer {
 export async function runFaultDetection(
   data: number[][],
   progressCallback?: ProgressCallback,
-  epochs: number = 150
+  epochs: number = 150,
+  useAllData: boolean = true
 ): Promise<AEResults | null> {
   try {
     // 初始化分析器
@@ -425,8 +441,8 @@ export async function runFaultDetection(
       progressCallback('🔄 正在进行数据预处理...');
     }
 
-    // 预处理数据
-    const { XTrain, XTest } = analyzer.preprocessData(cleanData);
+    // 预处理数据 - 使用全部数据进行异常检测
+    const { XTrain, XTest } = analyzer.preprocessData(cleanData, 0.2, useAllData);
 
     if (progressCallback) {
       progressCallback('✅ 数据预处理完成');
@@ -491,9 +507,10 @@ export async function runFaultDetection(
 export async function runAeRe2Analysis(
   data: number[][],
   progressCallback?: ProgressCallback,
-  epochs: number = 150
+  epochs: number = 150,
+  useAllData: boolean = true
 ): Promise<AEResults | null> {
-  return runFaultDetection(data, progressCallback, epochs);
+  return runFaultDetection(data, progressCallback, epochs, useAllData);
 }
 
 /**
@@ -502,7 +519,8 @@ export async function runAeRe2Analysis(
 export async function runAeSpeAnalysis(
   data: number[][],
   progressCallback?: ProgressCallback,
-  epochs: number = 150
+  epochs: number = 150,
+  useAllData: boolean = true
 ): Promise<AEResults | null> {
-  return runFaultDetection(data, progressCallback, epochs);
+  return runFaultDetection(data, progressCallback, epochs, useAllData);
 } 
