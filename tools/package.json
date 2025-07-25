@@ -1,0 +1,29 @@
+{
+  "name": "ae-local-dev-tools",
+  "version": "1.0.0",
+  "description": "本地开发工具，用于在浏览器中启动Python后端服务",
+  "main": "local-dev-server.js",
+  "scripts": {
+    "start": "node local-dev-server.js",
+    "dev": "nodemon local-dev-server.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "python",
+    "backend",
+    "development",
+    "local"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+} 
