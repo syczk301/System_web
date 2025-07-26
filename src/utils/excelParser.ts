@@ -74,10 +74,20 @@ export const getNumericColumns = (parsedData: ParsedData): { [key: string]: numb
   const numericData: { [key: string]: number[] } = {};
   
   parsedData.headers.forEach((header, colIndex) => {
-    const columnData = parsedData.data.map(row => {
-      const value = row[colIndex];
-      return typeof value === 'number' ? value : parseFloat(value);
-    }).filter(val => !isNaN(val));
+    const columnData = parsedData.data
+      .map(row => {
+        const value = row[colIndex];
+        if (typeof value === 'number') {
+          return value;
+        }
+        if (typeof value === 'string') {
+          // 尝试从字符串中解析数值，忽略非数值字符
+          const parsed = parseFloat(value.replace(/[^0-9.-]/g, ''));
+          return isNaN(parsed) ? null : parsed;
+        }
+        return null;
+      })
+      .filter((val): val is number => val !== null && isFinite(val));
     
     if (columnData.length > 0) {
       numericData[header] = columnData;
