@@ -30,7 +30,7 @@ import ReactECharts from 'echarts-for-react';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
 import { removeResult } from '../store/slices/analysisSlice';
 import type { AnalysisResult } from '../store/slices/analysisSlice';
-import { useAutoUpload } from '../hooks/useAutoUpload';
+// useAutoUpload已移除，数据现在通过全局预加载器处理
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -49,7 +49,7 @@ const Results: React.FC = () => {
   const { files } = useAppSelector((state) => state.data);
 
   // 自动加载数据
-  const { autoUploadCompleted, isLoading } = useAutoUpload();
+  // 移除useAutoUpload - 数据现在通过全局预加载器自动处理
 
   const getAnalysisTypeName = (type: string) => {
     const typeMap: Record<string, string> = {

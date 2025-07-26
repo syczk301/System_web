@@ -37,9 +37,9 @@ import {
   setFilter,
 } from '../store/slices/dataSlice';
 import type { DataFile } from '../store/slices/dataSlice';
-import { autoUploadFiles, isFileAlreadyUploaded } from '../utils/autoUpload';
+// 移除autoUpload导入 - 已被数据预加载器替代
 import { parseExcelFile, convertToTableData, getDataStatistics, type ParsedData } from '../utils/excelParser';
-import { useAutoUpload } from '../hooks/useAutoUpload';
+// useAutoUpload已移除，数据现在通过全局预加载器处理
 import dayjs from 'dayjs';
 
 const { Title, Text } = Typography;
@@ -58,7 +58,7 @@ const DataManagement: React.FC = () => {
   const { files, filter } = useAppSelector((state) => state.data);
 
   // 自动加载数据
-  const { autoUploadCompleted, isLoading } = useAutoUpload();
+  // 移除useAutoUpload - 数据现在通过全局预加载器自动处理
 
 
   const handleUpload = async (file: File) => {
@@ -394,13 +394,7 @@ const DataManagement: React.FC = () => {
 
       {/* 文件上传 */}
       <Card title="文件上传" className="mb-6">
-        {!autoUploadCompleted && (
-          <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded">
-            <Text className="text-blue-600">
-              📁 系统正在自动加载预设数据文件（正常数据.xlsx, 质检数据.xlsx）...
-            </Text>
-          </div>
-        )}
+        {/* 上传提示已移除，数据通过全局预加载器无感处理 */}
         <Dragger
           name="file"
           multiple

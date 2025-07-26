@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Card,
   Form,
@@ -35,7 +35,6 @@ import { updateConfig } from '../store/slices/analysisSlice';
 import { addResult, updateResult } from '../store/slices/analysisSlice';
 import type { AnalysisResult } from '../store/slices/analysisSlice';
 import { getNumericColumns } from '../utils/excelParser';
-import { useAutoUpload } from '../hooks/useAutoUpload';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -211,8 +210,22 @@ const SPCAnalysis: React.FC = () => {
   const { files } = useAppSelector((state) => state.data);
   const { config } = useAppSelector((state) => state.analysis);
 
-  // 自动加载数据
-  const { autoUploadCompleted, isLoading } = useAutoUpload();
+  // 数据现在通过全局预加载器在应用启动时自动加载
+
+  // 自动选择第一个可用文件
+  useEffect(() => {
+    const successFiles = files.filter(f => f.status === 'success');
+    if (successFiles.length > 0 && !form.getFieldValue('dataFile')) {
+      // 优先选择质检数据，如果没有则选择第一个可用文件
+      let selectedFile = successFiles.find(f => f.name.includes('质检数据'));
+      if (!selectedFile) {
+        selectedFile = successFiles[0];
+      }
+      
+      console.log('[SPC页面] 自动选择文件:', selectedFile.name, 'ID:', selectedFile.id);
+      form.setFieldValue('dataFile', selectedFile.id);
+    }
+  }, [files, form]);
 
   const performXbarRAnalysis = (data: number[], subgroupSize: number, parameter: string) => {
     try {
@@ -731,11 +744,22 @@ const SPCAnalysis: React.FC = () => {
                     setSelectedParameter('');
                   }}
                 >
-                  {files.filter(f => f.status === 'success').map(file => (
-                    <Option key={file.id} value={file.id}>
-                      {file.name}
-                    </Option>
-                  ))}
+                  {(() => {
+                    console.log('[SPC页面] 所有文件:', files);
+                    const successFiles = files.filter(f => f.status === 'success');
+                    console.log('[SPC页面] 成功加载的文件:', successFiles);
+                    
+                    if (successFiles.length === 0) {
+                      console.log('[SPC页面] 没有找到状态为success的文件');
+                      return <Option disabled value="">没有可用的数据文件</Option>;
+                    }
+                    
+                    return successFiles.map(file => (
+                      <Option key={file.id} value={file.id}>
+                        {file.name}
+                      </Option>
+                    ));
+                  })()}
                 </Select>
               </Form.Item>
 
@@ -750,22 +774,25 @@ const SPCAnalysis: React.FC = () => {
                 >
                   {(() => {
                     const selectedFileId = form.getFieldValue('dataFile');
-                    if (!selectedFileId) return null;
+                    
+                    if (!selectedFileId) {
+                      return <Option disabled value="">请先选择数据文件</Option>;
+                    }
                     
                     const selectedFile = files.find(f => f.id === selectedFileId);
+                    
                     if (!selectedFile || !selectedFile.rawData) {
-                      return <Option disabled value="">请先选择数据文件</Option>;
+                      return <Option disabled value="">数据文件加载中...</Option>;
                     }
                     
                     const numericColumns = getNumericColumns(selectedFile.rawData);
                     const columnNames = Object.keys(numericColumns);
                     
-                    console.log('Selected file:', selectedFile.name);
-                    console.log('Raw data:', selectedFile.rawData);
-                    console.log('Numeric columns:', numericColumns);
-                    console.log('Column names:', columnNames);
+                    console.log('[SPC页面] 当前选中文件:', selectedFile.name);
+                    console.log('[SPC页面] 找到数值列:', columnNames.length, '个');
                     
                     if (columnNames.length === 0) {
+                      console.log('[SPC页面] 该文件没有找到数值列');
                       return <Option disabled value="">该文件没有数值列可用于分析</Option>;
                     }
                     
@@ -863,6 +890,40 @@ const SPCAnalysis: React.FC = () => {
                     停止分析
                   </Button>
                 </Space>
+              </Form.Item>
+              
+              {/* 调试工具 */}
+              <Form.Item>
+                <Button
+                  type="dashed"
+                  icon={<InfoCircleOutlined />}
+                  onClick={() => {
+                    console.log('=== 数据状态调试信息 ===');
+                    console.log('Store中的文件:', files);
+                    
+                    const selectedFileId = form.getFieldValue('dataFile');
+                    if (selectedFileId) {
+                      const selectedFile = files.find(f => f.id === selectedFileId);
+                      console.log('选中的文件:', selectedFile);
+                      
+                      if (selectedFile?.rawData) {
+                        console.log('原始数据:', selectedFile.rawData);
+                        const numericColumns = getNumericColumns(selectedFile.rawData);
+                        console.log('数值列分析结果:', numericColumns);
+                        console.log('可用的数值列名:', Object.keys(numericColumns));
+                      } else {
+                        console.log('没有原始数据可用');
+                      }
+                    } else {
+                      console.log('没有选中文件');
+                    }
+                    
+                    console.log('当前选择的参数:', selectedParameter);
+                    console.log('========================');
+                  }}
+                >
+                  调试数据状态
+                </Button>
               </Form.Item>
             </Form>
           </Card>

@@ -41,7 +41,7 @@ import {
   type ProgressCallback 
 } from '../utils/autoEncoder';
 import { exportChartDataToCSV } from '../utils/exportUtils';
-import { useAutoUpload } from '../hooks/useAutoUpload';
+// useAutoUpload已移除，数据现在通过全局预加载器处理
 
 const { Title, Text, Paragraph } = Typography;
 const { Option } = Select;
@@ -56,51 +56,75 @@ const extractNumericData = (parsedData: any): number[][] => {
   if (!parsedData || !parsedData.data) {
     throw new Error('数据格式错误');
   }
-  
+
   const { headers, data } = parsedData;
   
-  // 找出数值列的索引
+  // 使用与getNumericColumns相同的智能数值提取逻辑
   const numericColumnIndices: number[] = [];
-  const sampleRow = data[0] || [];
+  const numericColumns: { [key: string]: number[] } = {};
   
-  headers.forEach((header: string, index: number) => {
-    const sampleValue = sampleRow[index];
-    if (typeof sampleValue === 'number' && !isNaN(sampleValue)) {
-      numericColumnIndices.push(index);
+  // 对每一列进行数值提取测试
+  headers.forEach((header: string, colIndex: number) => {
+    const columnData: number[] = [];
+    
+    // 遍历该列的所有数据，尝试提取数值
+    for (let rowIndex = 0; rowIndex < data.length; rowIndex++) {
+      const value = data[rowIndex][colIndex];
+      
+      if (typeof value === 'number') {
+        columnData.push(value);
+      } else if (typeof value === 'string' && value.trim() !== '') {
+        // 尝试从字符串中解析数值，忽略非数值字符（如单位）
+        const parsed = parseFloat(value.replace(/[^0-9.-]/g, ''));
+        if (!isNaN(parsed) && isFinite(parsed)) {
+          columnData.push(parsed);
+        }
+      }
+    }
+    
+    // 如果该列有足够的数值数据，就认为是数值列
+    if (columnData.length > 0) {
+      numericColumnIndices.push(colIndex);
+      numericColumns[header] = columnData;
     }
   });
-  
+
+  console.log('[AE分析] 数值列检测结果:');
+  console.log('  - 找到的数值列索引:', numericColumnIndices);
+  console.log('  - 数值列名称和数据量:', Object.keys(numericColumns).map(col => `${col}(${numericColumns[col].length}个数值)`));
+
   if (numericColumnIndices.length === 0) {
+    console.error('[AE分析] 数值列检测失败，原始数据:', { headers, sampleData: data.slice(0, 3) });
     throw new Error('没有找到数值列');
   }
-  
-  // 提取数值数据
+
+  // 使用提取出的数值数据构建矩阵
   const numericData: number[][] = [];
+  const maxRows = Math.max(...Object.values(numericColumns).map(col => col.length));
   
-  for (let i = 0; i < data.length; i++) {
-    const row = data[i];
-    const numericRow: number[] = [];
-    let hasValidData = true;
+  for (let rowIndex = 0; rowIndex < maxRows; rowIndex++) {
+    const row: number[] = [];
+    let hasAnyData = false;
     
     for (const colIndex of numericColumnIndices) {
-      const value = row[colIndex];
-      if (typeof value === 'number' && !isNaN(value) && isFinite(value)) {
-        numericRow.push(value);
+      const header = headers[colIndex];
+      const columnData = numericColumns[header];
+      
+      if (rowIndex < columnData.length) {
+        row.push(columnData[rowIndex]);
+        hasAnyData = true;
       } else {
-        hasValidData = false;
+        // 如果这一行在某列中没有数据，跳过这一行
         break;
       }
     }
     
-    if (hasValidData && numericRow.length > 0) {
-      numericData.push(numericRow);
+    if (hasAnyData && row.length === numericColumnIndices.length) {
+      numericData.push(row);
     }
   }
-  
-  if (numericData.length === 0) {
-    throw new Error('没有有效的数值数据');
-  }
-  
+
+  console.log('[AE分析] 提取的数值数据矩阵大小:', `${numericData.length} x ${numericData[0]?.length || 0}`);
   return numericData;
 };
 
@@ -118,7 +142,17 @@ const AEAnalysis: React.FC = () => {
   const { config } = useAppSelector((state) => state.analysis);
 
   // 自动加载数据
-  const { autoUploadCompleted, isLoading } = useAutoUpload();
+  // 移除useAutoUpload - 数据现在通过全局预加载器自动处理
+
+  // 自动选择第一个可用文件
+  useEffect(() => {
+    const successFiles = files.filter(f => f.status === 'success');
+    if (successFiles.length > 0 && !form.getFieldValue('dataFile')) {
+      const firstFileId = successFiles[0].id;
+      console.log('[AE分析] 自动选择第一个文件:', successFiles[0].name, 'ID:', firstFileId);
+      form.setFieldValue('dataFile', firstFileId);
+    }
+  }, [files, form]);
 
   // 清理资源
   useEffect(() => {

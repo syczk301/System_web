@@ -28,7 +28,7 @@ import { updateConfig } from '../store/slices/analysisSlice';
 import { addResult, updateResult } from '../store/slices/analysisSlice';
 import type { AnalysisResult } from '../store/slices/analysisSlice';
 import { getNumericColumns } from '../utils/excelParser';
-import { useAutoUpload } from '../hooks/useAutoUpload';
+// useAutoUpload已移除，数据现在通过全局预加载器处理
 
 const { Title, Text } = Typography;
 const { Option } = Select;
@@ -1140,7 +1140,27 @@ const ICAAnalysis: React.FC = () => {
   const { config, results } = useAppSelector((state) => state.analysis);
 
   // 自动加载数据
-  const { autoUploadCompleted, isLoading } = useAutoUpload();
+  // 移除useAutoUpload - 数据现在通过全局预加载器自动处理
+
+  // 自动选择第一个可用文件
+  useEffect(() => {
+    const successFiles = files.filter(f => f.status === 'success');
+    console.log('[ICA分析] 检查文件自动选择:', {
+      totalFiles: files.length,
+      successFiles: successFiles.length,
+      currentDataFile: formValues.dataFile,
+      fileNames: successFiles.map(f => f.name)
+    });
+    
+    if (successFiles.length > 0 && !formValues.dataFile) {
+      const firstFileId = successFiles[0].id;
+      console.log('[ICA分析] 自动选择第一个文件:', successFiles[0].name, 'ID:', firstFileId);
+      
+      // 同时更新form和formValues状态
+      form.setFieldValue('dataFile', firstFileId);
+      setFormValues(prev => ({ ...prev, dataFile: firstFileId }));
+    }
+  }, [files, form, formValues.dataFile]);
 
   // 获取最新的ICA分析结果
   const currentResult = results

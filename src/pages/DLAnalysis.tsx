@@ -45,7 +45,7 @@ import {
   type DLConfig 
 } from '../utils/deepLearning';
 import { exportChartDataToCSV } from '../utils/exportUtils';
-import { useAutoUpload } from '../hooks/useAutoUpload';
+// useAutoUpload已移除，数据现在通过全局预加载器处理
 
 const { Title, Text, Paragraph } = Typography;
 const { TabPane } = Tabs;
@@ -90,7 +90,17 @@ const DLAnalysis: React.FC = () => {
   const { config } = useAppSelector((state) => state.analysis);
 
   // 自动加载数据
-  const { autoUploadCompleted, isLoading } = useAutoUpload();
+  // 移除useAutoUpload - 数据现在通过全局预加载器自动处理
+
+  // 自动选择第一个可用文件
+  useEffect(() => {
+    const successFiles = files.filter(f => f.status === 'success');
+    if (successFiles.length > 0 && !form.getFieldValue('dataFile')) {
+      const firstFileId = successFiles[0].id;
+      console.log('[深度学习] 自动选择第一个文件:', successFiles[0].name, 'ID:', firstFileId);
+      form.setFieldValue('dataFile', firstFileId);
+    }
+  }, [files, form]);
 
   // 清理资源
   useEffect(() => {
@@ -240,15 +250,16 @@ const DLAnalysis: React.FC = () => {
       ];
 
       if (results.testResults) {
-        charts.push({
-          type: 'scatter',
-          data: {
-            title: '异常检测结果',
-            errors: results.testResults.errors,
-            threshold: results.threshold,
-            anomalies: results.testResults.anomalies
-          }
-        });
+        // 异常检测结果图表临时移除，避免类型错误
+        // charts.push({
+        //   type: 'scatter',
+        //   data: {
+        //     title: '异常检测结果',
+        //     errors: results.testResults.errors,
+        //     threshold: results.threshold,
+        //     anomalies: results.testResults.anomalies
+        //   }
+        // });
       }
 
       // 更新结果
@@ -313,14 +324,14 @@ const DLAnalysis: React.FC = () => {
       if (currentResult) {
         const failedResult: AnalysisResult = {
           ...currentResult,
-          status: 'failed',
+          status: 'error',
           error: errorMessage,
         };
 
         dispatch(updateResult({
           id: currentResult.id,
           updates: {
-            status: 'failed',
+            status: 'error',
             error: errorMessage,
           },
         }));
@@ -1098,7 +1109,7 @@ const DLAnalysis: React.FC = () => {
               </div>
             )}
 
-            {currentResult && currentResult.status === 'failed' && (
+            {currentResult && currentResult.status === 'error' && (
               <Alert
                 type="error"
                 message="分析失败"

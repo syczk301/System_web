@@ -22,8 +22,8 @@ import {
   ClockCircleOutlined,
 } from '@ant-design/icons';
 import { useAppSelector, useAppDispatch } from '../store/hooks';
-import { autoUploadFiles, isFileAlreadyUploaded } from '../utils/autoUpload';
-import { useAutoUpload } from '../hooks/useAutoUpload';
+// 移除autoUpload导入 - 已被数据预加载器替代
+// useAutoUpload已移除，数据现在通过全局预加载器处理
 
 const { Title, Paragraph, Text } = Typography;
 
@@ -35,7 +35,7 @@ const Home: React.FC = () => {
   const { results } = useAppSelector((state) => state.analysis);
 
   // 自动加载数据
-  const { autoUploadCompleted, isLoading } = useAutoUpload();
+  // 移除useAutoUpload - 数据现在通过全局预加载器自动处理
 
   const quickActions = [
     {
@@ -115,11 +115,7 @@ const Home: React.FC = () => {
             <Paragraph className="!text-blue-100 text-lg !mb-4">
               专业的工业过程监控与故障诊断平台，集成PCA、ICA、自动编码器等多种先进算法
             </Paragraph>
-            {!autoUploadCompleted && isLoading && (
-              <div className="mb-4 p-3 bg-blue-100 border border-blue-300 rounded text-blue-800">
-                📁 系统正在自动加载预设数据文件（正常数据.xlsx, 质检数据.xlsx）...
-              </div>
-            )}
+            {/* 上传提示已移除，数据通过全局预加载器无感处理 */}
 
           </Col>
           <Col span={8} className="text-right">

@@ -1,5 +1,5 @@
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';
-import type { ParsedData } from '../utils/excelParser';
+import type { ParsedData } from '../../utils/excelParser';
 
 export interface DataFile {
   id: string;
@@ -10,9 +10,10 @@ export interface DataFile {
   data?: any[];
   columns?: string[];
   rawData?: ParsedData;
-  statistics?: { [key: string]: any };
+  statistics?: any;
   rowCount?: number;
   columnCount?: number;
+  error?: string;
 }
 
 export interface DataFilter {
@@ -48,18 +49,30 @@ const dataSlice = createSlice({
       state.uploadProgress = action.payload;
     },
     addFile: (state, action: PayloadAction<DataFile>) => {
+      console.log('[DataSlice] 添加文件:', action.payload.name, '状态:', action.payload.status);
       state.files.push(action.payload);
+      console.log('[DataSlice] 当前文件总数:', state.files.length);
     },
     updateFile: (state, action: PayloadAction<{ id: string; updates: Partial<DataFile> }>) => {
-      const index = state.files.findIndex(file => file.id === action.payload.id);
-      if (index !== -1) {
-        state.files[index] = { ...state.files[index], ...action.payload.updates };
+      const { id, updates } = action.payload;
+      const fileIndex = state.files.findIndex(file => file.id === id);
+      if (fileIndex !== -1) {
+        console.log('[DataSlice] 更新文件:', state.files[fileIndex].name, '更新内容:', Object.keys(updates));
+        state.files[fileIndex] = { ...state.files[fileIndex], ...updates };
+        if (updates.status) {
+          console.log('[DataSlice] 文件状态更新为:', updates.status);
+        }
+      } else {
+        console.warn('[DataSlice] 未找到要更新的文件 ID:', id);
       }
     },
     removeFile: (state, action: PayloadAction<string>) => {
-      state.files = state.files.filter(file => file.id !== action.payload);
-      if (state.currentFile?.id === action.payload) {
-        state.currentFile = null;
+      const fileId = action.payload;
+      const fileIndex = state.files.findIndex(file => file.id === fileId);
+      if (fileIndex !== -1) {
+        const fileName = state.files[fileIndex].name;
+        state.files.splice(fileIndex, 1);
+        console.log('[DataSlice] 移除文件:', fileName, '剩余文件数:', state.files.length);
       }
     },
     setCurrentFile: (state, action: PayloadAction<DataFile | null>) => {
@@ -69,8 +82,8 @@ const dataSlice = createSlice({
       state.filter = action.payload;
     },
     clearFiles: (state) => {
+      console.log('[DataSlice] 清空所有文件，之前有:', state.files.length, '个文件');
       state.files = [];
-      state.currentFile = null;
     },
   },
 });
