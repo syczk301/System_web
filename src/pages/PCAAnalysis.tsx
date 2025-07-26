@@ -42,7 +42,7 @@ const PCAAnalysis: React.FC = () => {
   const [formValues, setFormValues] = useState({
     autoSelect: true,
     confidenceLevel: 0.05,
-    removeOutliers: false,
+    removeOutliers: true,
     nComponents: 10,
     dataFile: undefined
   });

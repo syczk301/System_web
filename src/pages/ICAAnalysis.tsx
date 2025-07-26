@@ -1962,22 +1962,7 @@ const ICAAnalysis: React.FC = () => {
                     return '即将完成...';
                   })()}
                 </div>
-                {formValues.autoComponents && (
-                  <div className="mt-3 p-3 bg-blue-50 rounded border border-blue-200">
-                    <Text type="secondary" className="text-sm">
-                      💡 正在使用自动选择模式，将采用 min(4, 变量数量) 确定独立成分数量...
-                      {files.find(f => f.id === formValues.dataFile)?.rawData && (() => {
-                        const numVars = Object.keys(getNumericColumns(files.find(f => f.id === formValues.dataFile)!.rawData!)).length;
-                        const autoComponents = Math.min(4, numVars);
-                        return (
-                          <div className="mt-2 text-xs text-blue-600">
-                            基于{numVars}个变量，将自动选择{autoComponents}个独立成分
-                          </div>
-                        );
-                      })()}
-                    </Text>
-                  </div>
-                )}
+                {/* 移除自动选择模式的提示信息 */}
               </div>
             )}
 
