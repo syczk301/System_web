@@ -206,6 +206,7 @@ const SPCAnalysis: React.FC = () => {
   const [currentResult, setCurrentResult] = useState<AnalysisResult | null>(null);
   const [chartType, setChartType] = useState<string>('xbar-r');
   const [selectedParameter, setSelectedParameter] = useState<string>('');
+  const [selectedFileId, setSelectedFileId] = useState<string>('');
   const dispatch = useAppDispatch();
   const { files } = useAppSelector((state) => state.data);
   const { config } = useAppSelector((state) => state.analysis);
@@ -224,6 +225,12 @@ const SPCAnalysis: React.FC = () => {
       
       console.log('[SPC页面] 自动选择文件:', selectedFile.name, 'ID:', selectedFile.id);
       form.setFieldValue('dataFile', selectedFile.id);
+      setSelectedFileId(selectedFile.id); // 更新状态
+      
+      // 强制组件重新渲染以更新监测特性下拉框
+      setTimeout(() => {
+        form.validateFields(['dataFile']);
+      }, 100);
     }
   }, [files, form]);
 
@@ -742,7 +749,9 @@ const SPCAnalysis: React.FC = () => {
                   onChange={(value) => {
                     // 当数据文件改变时，清空监测特性选择
                     setSelectedParameter('');
+                    setSelectedFileId(value); // 更新状态
                   }}
+                  value={selectedFileId}
                 >
                   {(() => {
                     console.log('[SPC页面] 所有文件:', files);
@@ -773,13 +782,22 @@ const SPCAnalysis: React.FC = () => {
                   onChange={setSelectedParameter}
                 >
                   {(() => {
-                    const selectedFileId = form.getFieldValue('dataFile');
+                    // 使用状态而不是form.getFieldValue来确保及时更新
+                    const currentSelectedFileId = selectedFileId || form.getFieldValue('dataFile');
+                    console.log('[SPC页面] 监测特性检查:', {
+                      selectedFileId,
+                      currentSelectedFileId,
+                      formValue: form.getFieldValue('dataFile'),
+                      filesCount: files.length,
+                      successFilesCount: files.filter(f => f.status === 'success').length
+                    });
                     
-                    if (!selectedFileId) {
+                    if (!currentSelectedFileId) {
+                      console.log('[SPC页面] 没有选中文件ID');
                       return <Option disabled value="">请先选择数据文件</Option>;
                     }
                     
-                    const selectedFile = files.find(f => f.id === selectedFileId);
+                    const selectedFile = files.find(f => f.id === currentSelectedFileId);
                     
                     if (!selectedFile || !selectedFile.rawData) {
                       return <Option disabled value="">数据文件加载中...</Option>;
@@ -890,40 +908,6 @@ const SPCAnalysis: React.FC = () => {
                     停止分析
                   </Button>
                 </Space>
-              </Form.Item>
-              
-              {/* 调试工具 */}
-              <Form.Item>
-                <Button
-                  type="dashed"
-                  icon={<InfoCircleOutlined />}
-                  onClick={() => {
-                    console.log('=== 数据状态调试信息 ===');
-                    console.log('Store中的文件:', files);
-                    
-                    const selectedFileId = form.getFieldValue('dataFile');
-                    if (selectedFileId) {
-                      const selectedFile = files.find(f => f.id === selectedFileId);
-                      console.log('选中的文件:', selectedFile);
-                      
-                      if (selectedFile?.rawData) {
-                        console.log('原始数据:', selectedFile.rawData);
-                        const numericColumns = getNumericColumns(selectedFile.rawData);
-                        console.log('数值列分析结果:', numericColumns);
-                        console.log('可用的数值列名:', Object.keys(numericColumns));
-                      } else {
-                        console.log('没有原始数据可用');
-                      }
-                    } else {
-                      console.log('没有选中文件');
-                    }
-                    
-                    console.log('当前选择的参数:', selectedParameter);
-                    console.log('========================');
-                  }}
-                >
-                  调试数据状态
-                </Button>
               </Form.Item>
             </Form>
           </Card>
