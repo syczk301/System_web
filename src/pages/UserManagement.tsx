@@ -27,21 +27,10 @@ import {
   SearchOutlined,
 } from '@ant-design/icons';
 import { useAppSelector } from '../store/hooks';
+import userService, { User } from '../services/userService';
 
 const { Title, Text } = Typography;
 const { Option } = Select;
-
-interface User {
-  id: string;
-  username: string;
-  email: string;
-  role: 'admin' | 'user';
-  status: 'active' | 'inactive';
-  lastLogin: string;
-  createdAt: string;
-  department?: string;
-  phone?: string;
-}
 
 const UserManagement: React.FC = () => {
   const [users, setUsers] = useState<User[]>([]);
@@ -52,56 +41,15 @@ const UserManagement: React.FC = () => {
   const [form] = Form.useForm();
   const { user: currentUser } = useAppSelector((state) => state.auth);
 
-  // 模拟用户数据
+  // 加载用户数据
   useEffect(() => {
-    const mockUsers: User[] = [
-      {
-        id: '1',
-        username: 'admin',
-        email: 'admin@example.com',
-        role: 'admin',
-        status: 'active',
-        lastLogin: '2024-01-15 10:30:00',
-        createdAt: '2024-01-01 09:00:00',
-        department: '信息技术部',
-        phone: '13800138001',
-      },
-      {
-        id: '2',
-        username: 'user1',
-        email: 'user1@example.com',
-        role: 'user',
-        status: 'active',
-        lastLogin: '2024-01-15 14:20:00',
-        createdAt: '2024-01-02 10:00:00',
-        department: '生产部',
-        phone: '13800138002',
-      },
-      {
-        id: '3',
-        username: 'user2',
-        email: 'user2@example.com',
-        role: 'user',
-        status: 'inactive',
-        lastLogin: '2024-01-10 16:45:00',
-        createdAt: '2024-01-03 11:00:00',
-        department: '质量部',
-        phone: '13800138003',
-      },
-      {
-        id: '4',
-        username: 'analyst1',
-        email: 'analyst1@example.com',
-        role: 'user',
-        status: 'active',
-        lastLogin: '2024-01-15 09:15:00',
-        createdAt: '2024-01-05 14:00:00',
-        department: '数据分析部',
-        phone: '13800138004',
-      },
-    ];
-    setUsers(mockUsers);
+    loadUsers();
   }, []);
+
+  const loadUsers = () => {
+    const allUsers = userService.getAllUsers();
+    setUsers(allUsers);
+  };
 
   const handleAddUser = () => {
     setEditingUser(null);
@@ -116,8 +64,13 @@ const UserManagement: React.FC = () => {
   };
 
   const handleDeleteUser = (userId: string) => {
-    setUsers(users.filter(user => user.id !== userId));
-    message.success('用户删除成功');
+    const success = userService.deleteUser(userId);
+    if (success) {
+      loadUsers();
+      message.success('用户删除成功');
+    } else {
+      message.error('用户删除失败');
+    }
   };
 
   const handleModalOk = async () => {
@@ -127,21 +80,33 @@ const UserManagement: React.FC = () => {
 
       if (editingUser) {
         // 编辑用户
-        setUsers(users.map(user => 
-          user.id === editingUser.id 
-            ? { ...user, ...values }
-            : user
-        ));
-        message.success('用户信息更新成功');
+        const updatedUser = userService.updateUser(editingUser.id, values);
+        if (updatedUser) {
+          loadUsers();
+          message.success('用户信息更新成功');
+        } else {
+          message.error('用户更新失败');
+          return;
+        }
       } else {
+        // 检查用户名是否已存在
+        if (userService.isUsernameExists(values.username)) {
+          message.error('用户名已存在，请选择其他用户名');
+          return;
+        }
+        
         // 添加新用户
-        const newUser: User = {
-          id: Date.now().toString(),
-          ...values,
-          lastLogin: '-',
-          createdAt: new Date().toLocaleString(),
-        };
-        setUsers([...users, newUser]);
+        const newUser = userService.addUser({
+          username: values.username,
+          password: values.password,
+          email: values.email,
+          role: values.role,
+          status: values.status,
+          department: values.department,
+          phone: values.phone
+        });
+        
+        loadUsers();
         message.success('用户添加成功');
       }
 
@@ -218,16 +183,22 @@ const UserManagement: React.FC = () => {
       title: '最后登录',
       dataIndex: 'lastLogin',
       key: 'lastLogin',
-      render: (text: string) => (
-        <Text type={text === '-' ? 'secondary' : undefined}>
-          {text === '-' ? '从未登录' : text}
-        </Text>
-      ),
+      render: (text: string) => {
+        if (!text) {
+          return <Text type="secondary">从未登录</Text>;
+        }
+        const date = new Date(text);
+        return <Text>{date.toLocaleString()}</Text>;
+      },
     },
     {
       title: '创建时间',
       dataIndex: 'createdAt',
       key: 'createdAt',
+      render: (text: string) => {
+        const date = new Date(text);
+        return date.toLocaleString();
+      },
     },
     {
       title: '操作',
@@ -384,7 +355,6 @@ const UserManagement: React.FC = () => {
                 name="email"
                 label="邮箱"
                 rules={[
-                  { required: true, message: '请输入邮箱' },
                   { type: 'email', message: '请输入有效的邮箱地址' },
                 ]}
               >

@@ -19,6 +19,7 @@ import {
 } from '@ant-design/icons';
 import { useAppDispatch } from '../store/hooks';
 import { loginSuccess } from '../store/slices/authSlice';
+import userService from '../services/userService';
 
 const { Title, Text } = Typography;
 const { TabPane } = Tabs;
@@ -77,12 +78,22 @@ const Login: React.FC = () => {
       // 模拟登录API调用
       await new Promise(resolve => setTimeout(resolve, 1000));
       
+      // 使用UserService进行用户验证
+      const loginResult = userService.validateLogin(values.username, values.password);
+      
+      if (!loginResult.success) {
+        message.error(loginResult.message || '登录失败');
+        return;
+      }
+      
+      const user = loginResult.user!;
+      
       // 模拟用户数据
       const userData = {
-        id: '1',
-        username: values.username,
-        email: 'user@example.com',
-        role: values.username === 'admin' ? 'admin' as const : 'user' as const,
+        id: user.id,
+        username: user.username,
+        email: user.email || `${user.username}@example.com`,
+        role: user.role,
         department: '质量控制部',
         createdAt: new Date().toISOString(),
       };
@@ -106,7 +117,7 @@ const Login: React.FC = () => {
       message.success('登录成功！');
       navigate('/home');
     } catch (error) {
-      message.error('登录失败，请检查用户名和密码');
+      message.error('登录失败，请稍后重试');
     } finally {
       setLoading(false);
     }
