@@ -44,17 +44,64 @@ class UserService {
 
   private initializeUsers(): void {
     const existingUsers = this.getAllUsers();
-    if (existingUsers.length === 0) {
-      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(this.DEFAULT_USERS));
+    
+    // 检查是否需要初始化默认用户
+    const hasDefaultAdmin = existingUsers.some(user => user.username === 'admin' && user.id === 'admin-default');
+    const hasDefaultUser = existingUsers.some(user => user.username === 'user' && user.id === 'user-default');
+    
+    if (existingUsers.length === 0 || !hasDefaultAdmin || !hasDefaultUser) {
+      // 如果没有用户数据或缺少默认用户，则重新初始化
+      const usersToKeep = existingUsers.filter(user => 
+        !this.DEFAULT_USERS.some(defaultUser => defaultUser.username === user.username)
+      );
+      
+      const allUsers = [...this.DEFAULT_USERS, ...usersToKeep];
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(allUsers));
+      
+      console.log('UserService: 已初始化默认用户数据');
     }
   }
 
   getAllUsers(): User[] {
     try {
       const users = localStorage.getItem(this.STORAGE_KEY);
-      return users ? JSON.parse(users) : [];
+      if (!users) {
+        console.log('UserService: localStorage中无用户数据');
+        return [];
+      }
+      
+      const parsedUsers = JSON.parse(users);
+      
+      // 验证数据结构
+      if (!Array.isArray(parsedUsers)) {
+        console.error('UserService: localStorage中的用户数据格式错误，不是数组');
+        localStorage.removeItem(this.STORAGE_KEY);
+        return [];
+      }
+      
+      // 验证每个用户对象的必要字段
+      const validUsers = parsedUsers.filter(user => {
+        const isValid = user && 
+          typeof user.id === 'string' && 
+          typeof user.username === 'string' && 
+          typeof user.password === 'string' && 
+          typeof user.role === 'string' && 
+          typeof user.status === 'string';
+        
+        if (!isValid) {
+          console.warn('UserService: 发现无效用户数据:', user);
+        }
+        
+        return isValid;
+      });
+      
+      console.log(`UserService: 成功加载 ${validUsers.length} 个用户`);
+      return validUsers;
+      
     } catch (error) {
-      console.error('Error loading users:', error);
+      console.error('UserService: 解析localStorage用户数据时出错:', error);
+      // 清除损坏的数据
+      localStorage.removeItem(this.STORAGE_KEY);
       return [];
     }
   }
@@ -69,30 +116,75 @@ class UserService {
     return users.find(user => user.username === username) || null;
   }
 
-  addUser(userData: Omit<User, 'id' | 'createdAt'>): User {
+  addUser(userData: Omit<User, 'id' | 'createdAt' | 'lastLogin'>): User {
     const users = this.getAllUsers();
+    
+    // 检查用户名是否已存在
+    if (users.some(user => user.username === userData.username)) {
+      throw new Error('用户名已存在');
+    }
+    
     const newUser: User = {
-      ...userData,
       id: `user-${Date.now()}`,
-      createdAt: new Date().toISOString()
+      ...userData,
+      createdAt: new Date().toISOString(),
+      lastLogin: null
     };
     
     users.push(newUser);
-    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(users));
-    return newUser;
+    
+    try {
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(users));
+      console.log('UserService: 成功添加用户:', newUser.username);
+      
+      // 验证保存是否成功
+      const savedUsers = this.getAllUsers();
+      const savedUser = savedUsers.find(u => u.id === newUser.id);
+      if (!savedUser) {
+        throw new Error('用户保存验证失败');
+      }
+      
+      return newUser;
+    } catch (error) {
+      console.error('UserService: 添加用户失败:', error);
+      throw new Error('保存用户数据失败');
+    }
   }
 
-  updateUser(id: string, userData: Partial<Omit<User, 'id' | 'createdAt'>>): User | null {
+  updateUser(id: string, userData: Partial<Omit<User, 'id' | 'createdAt'>>): User {
     const users = this.getAllUsers();
     const userIndex = users.findIndex(user => user.id === id);
     
     if (userIndex === -1) {
-      return null;
+      throw new Error('用户不存在');
     }
     
-    users[userIndex] = { ...users[userIndex], ...userData };
-    localStorage.setItem(this.STORAGE_KEY, JSON.stringify(users));
-    return users[userIndex];
+    // 如果更新用户名，检查是否与其他用户冲突
+    if (userData.username && userData.username !== users[userIndex].username) {
+      if (users.some(user => user.username === userData.username && user.id !== id)) {
+        throw new Error('用户名已存在');
+      }
+    }
+    
+    const updatedUser = { ...users[userIndex], ...userData };
+    users[userIndex] = updatedUser;
+    
+    try {
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(users));
+      console.log('UserService: 成功更新用户:', updatedUser.username);
+      
+      // 验证保存是否成功
+      const savedUsers = this.getAllUsers();
+      const savedUser = savedUsers.find(u => u.id === id);
+      if (!savedUser) {
+        throw new Error('用户更新验证失败');
+      }
+      
+      return updatedUser;
+    } catch (error) {
+      console.error('UserService: 更新用户失败:', error);
+      throw new Error('保存用户数据失败');
+    }
   }
 
   deleteUser(id: string): boolean {

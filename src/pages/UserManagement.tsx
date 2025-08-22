@@ -16,6 +16,7 @@ import {
   Row,
   Col,
   Statistic,
+  Drawer,
 } from 'antd';
 import {
   UserAddOutlined,
@@ -25,6 +26,7 @@ import {
   TeamOutlined,
   CrownOutlined,
   SearchOutlined,
+  BugOutlined,
 } from '@ant-design/icons';
 import { useAppSelector } from '../store/hooks';
 import userService, { User } from '../services/userService';
@@ -39,6 +41,8 @@ const UserManagement: React.FC = () => {
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [searchText, setSearchText] = useState('');
   const [form] = Form.useForm();
+  const [debugDrawerVisible, setDebugDrawerVisible] = useState(false);
+  const [debugData, setDebugData] = useState<any>(null);
   const { user: currentUser } = useAppSelector((state) => state.auth);
 
   // 加载用户数据
@@ -242,13 +246,30 @@ const UserManagement: React.FC = () => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <Title level={3}>用户管理</Title>
-        <Button
-          type="primary"
-          icon={<UserAddOutlined />}
-          onClick={handleAddUser}
-        >
-          添加用户
-        </Button>
+        <Space>
+          <Button
+            icon={<BugOutlined />}
+            onClick={() => {
+              const storageData = {
+                localStorage_users: localStorage.getItem('system_users'),
+                parsed_users: userService.getAllUsers(),
+                storage_length: localStorage.length,
+                all_storage_keys: Object.keys(localStorage)
+              };
+              setDebugData(storageData);
+              setDebugDrawerVisible(true);
+            }}
+          >
+            调试数据
+          </Button>
+          <Button
+            type="primary"
+            icon={<UserAddOutlined />}
+            onClick={handleAddUser}
+          >
+            添加用户
+          </Button>
+        </Space>
       </div>
 
       {/* 统计卡片 */}
@@ -432,6 +453,76 @@ const UserManagement: React.FC = () => {
           )}
         </Form>
       </Modal>
+
+      {/* 调试数据抽屉 */}
+      <Drawer
+        title="调试信息 - localStorage数据"
+        placement="right"
+        onClose={() => setDebugDrawerVisible(false)}
+        open={debugDrawerVisible}
+        width={600}
+      >
+        {debugData && (
+          <div className="space-y-4">
+            <Card title="localStorage原始数据" size="small">
+              <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto">
+                {debugData.localStorage_users || '无数据'}
+              </pre>
+            </Card>
+            
+            <Card title="解析后的用户数据" size="small">
+              <pre className="bg-gray-100 p-2 rounded text-xs overflow-auto">
+                {JSON.stringify(debugData.parsed_users, null, 2)}
+              </pre>
+            </Card>
+            
+            <Card title="存储统计" size="small">
+              <p>localStorage项目数量: {debugData.storage_length}</p>
+              <p>所有存储键: {debugData.all_storage_keys.join(', ')}</p>
+            </Card>
+            
+            <div className="space-y-2">
+              <Button 
+                block 
+                onClick={() => {
+                  localStorage.removeItem('system_users');
+                  message.success('已清除用户数据');
+                  loadUsers();
+                }}
+                danger
+              >
+                清除用户数据
+              </Button>
+              <Button 
+                block 
+                onClick={() => {
+                  userService.getAllUsers(); // 触发重新初始化
+                  loadUsers();
+                  message.success('已重新初始化默认用户');
+                }}
+              >
+                重新初始化默认用户
+              </Button>
+              <Button 
+                block 
+                onClick={() => {
+                  const testUser = userService.addUser({
+                    username: 'test_' + Date.now(),
+                    password: 'test123',
+                    email: 'test@example.com',
+                    role: 'user',
+                    status: 'active'
+                  });
+                  loadUsers();
+                  message.success(`已添加测试用户: ${testUser.username}`);
+                }}
+              >
+                添加测试用户
+              </Button>
+            </div>
+          </div>
+        )}
+      </Drawer>
     </div>
   );
 };
